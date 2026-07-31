@@ -1,7 +1,10 @@
 import sys
 import time
 import argparse
+import os
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import config
 import market_data
@@ -11,6 +14,38 @@ import trade_logger
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
+        html = (
+            "<!DOCTYPE html><html><head><title>Binance AI Bot Status</title>"
+            "<style>body{font-family:sans-serif;background:#0d1117;color:#c9d1d9;text-align:center;padding:50px;}"
+            "h1{color:#2ea043;}.box{background:#161b22;padding:20px;border-radius:10px;display:inline-block;margin-top:20px;}</style></head>"
+            "<body><h1>🚀 Binance AI Trading Bot is Live & Running!</h1>"
+            "<div class='box'><p><b>Status:</b> 🟢 Active & Operational</p>"
+            "<p><b>Model:</b> Groq Llama-3.3-70b</p>"
+            "<p><b>Target:</b> Daily 0.5% - 1.0% Capital Growth</p></div></body></html>"
+        )
+        self.wfile.write(html.encode("utf-8"))
+
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server():
+    port = int(os.getenv("PORT", 8080))
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        print(f"[HEALTH-CHECK] HTTP Web Health-check server listening on port {port}...")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[HEALTH-CHECK] Server notice: {e}")
+
+def launch_health_server_in_bg():
+    t = threading.Thread(target=start_health_server, daemon=True)
+    t.start()
 
 class BotController:
     def __init__(self, dry_run: bool = False):
@@ -83,6 +118,9 @@ class BotController:
     def start(self):
         print_banner()
         trade_logger.init_db()
+        
+        # Launch lightweight HTTP web server for Render Web Service health check compliance
+        launch_health_server_in_bg()
         
         # Start Telegram command listener in background
         self.notifier.listen_for_commands(self)
