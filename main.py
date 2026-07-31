@@ -7,6 +7,7 @@ import config
 import market_data
 import indicators
 import ai_brain
+import trade_logger
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -17,6 +18,7 @@ class BotController:
         self.executor = BinanceFuturesExecutor()
         self.notifier = TelegramNotifier()
         self.paused = False
+        self.active_trade_id = None
         
         # State tracking
         self.latest_summary = {}
@@ -80,6 +82,7 @@ class BotController:
 
     def start(self):
         print_banner()
+        trade_logger.init_db()
         
         # Start Telegram command listener in background
         self.notifier.listen_for_commands(self)
@@ -103,6 +106,7 @@ class BotController:
         
         risk_mgr = RiskManager(initial_balance=self.latest_balance)
         cycle_count = 0
+        previous_position_side = "FLAT"
         
         while True:
             try:
@@ -137,6 +141,20 @@ class BotController:
                 else:
                     self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0}
 
+                # Detect position close event for self-learning log
+                if previous_position_side != "FLAT" and self.latest_position["side"] == "FLAT":
+                    print("[INFO] Position closed! Updating trade performance logger...")
+                    if self.active_trade_id:
+                        trade_logger.update_trade_exit(
+                            trade_id=self.active_trade_id,
+                            exit_price=self.latest_summary['current_price'],
+                            pnl_usdt=self.latest_position.get('unrealized_pnl', 0.0),
+                            pnl_pct=0.0
+                        )
+                        self.active_trade_id = None
+
+                previous_position_side = self.latest_position["side"]
+
                 # Check daily limits (0.5%-1.0% target hit or drawdown limit)
                 can_trade, limit_msg = risk_mgr.check_daily_limits(self.latest_balance)
                 print(f"🛡️  Risk Manager Status: {limit_msg}")
@@ -151,7 +169,7 @@ class BotController:
                         time.sleep(config.CHECK_INTERVAL_SECONDS)
                         continue
 
-                    # 3. Request Groq AI Trading Decision
+                    # 3. Request Groq AI Trading Decision (with Self-Learning Memory Injection)
                     print("🧠 Consulting Groq Llama-3.3 AI Brain for technical decision...")
                     ai_decision = ai_brain.analyze_market_with_ai(self.latest_summary, ticker_24h, current_position=self.latest_position["side"])
                     
@@ -182,6 +200,19 @@ class BotController:
                         print(f"   Stop Loss    : ${trade_params['sl_price']} (Risk: ${trade_params['risk_usdt']})")
                         print(f"   Take Profit  : ${trade_params['tp_price']} (RR Ratio: 1:{trade_params['risk_reward_ratio']})")
                         
+                        # Log trade entry into database
+                        self.active_trade_id = trade_logger.log_trade_entry(
+                            symbol=config.SYMBOL,
+                            side=action,
+                            entry_price=trade_params['entry_price'],
+                            quantity=trade_params['quantity'],
+                            sl_price=trade_params['sl_price'],
+                            tp_price=trade_params['tp_price'],
+                            ai_confidence=confidence,
+                            ai_reasoning=reasoning,
+                            indicator_summary=self.latest_summary
+                        )
+                        
                         if not self.dry_run:
                             print(f"🚀 Executing {action} order on Binance Futures Testnet...")
                             order_side = "BUY" if action == "LONG" else "SELL"
@@ -192,7 +223,6 @@ class BotController:
                                 self.executor.place_stop_loss_order(config.SYMBOL, action, trade_params['sl_price'], trade_params['quantity'])
                                 self.executor.place_take_profit_order(config.SYMBOL, action, trade_params['tp_price'], trade_params['quantity'])
                                 
-                                # Send Telegram alert
                                 self.notifier.send_trade_alert(
                                     action=action,
                                     price=trade_params['entry_price'],
@@ -232,7 +262,7 @@ def print_banner():
     print(f" Timeframe      : {config.TIMEFRAME}")
     print(f" Leverage       : {config.LEVERAGE}x")
     print(f" Target Growth  : {config.DAILY_TARGET_PROFIT_PCT * 100}% Daily")
-    print(f" AI Brain       : Groq ({config.GROQ_MODEL})")
+    print(f" AI Brain       : Groq ({config.GROQ_MODEL}) + Self-Learning DB")
     print(f" Telegram Bot   : Enabled (Chat ID: {config.TELEGRAM_CHAT_ID})")
     print("=" * 70 + "\n")
 

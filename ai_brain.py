@@ -1,6 +1,7 @@
 import json
 import requests
 import config
+import trade_logger
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -13,6 +14,9 @@ You evaluate market data based on 3 Core Indicators:
    - RULE: DO NOT open LONG if price is significantly below EMA 200 unless there is a strong Bullish RSI Divergence.
    - RULE: DO NOT open SHORT if price is significantly above EMA 200 unless there is a strong Bearish RSI Divergence.
 3. ATR (14) & Bollinger Bands: Dynamic volatility assessment for dynamic Stop-Loss & Take-Profit placement.
+
+IN-CONTEXT SELF-LEARNING DIRECTIVE:
+You have continuous memory of your recent trade outcomes. Analyze past trade performance (wins and losses). Adapt your thresholds dynamically to avoid repeating past mistakes while reinforcing winning patterns.
 
 CRITICAL INSTRUCTIONS:
 - Return ONLY a valid, raw JSON object (NO markdown, NO code block ticks ```json, NO extra text).
@@ -32,8 +36,11 @@ JSON Output Schema:
 
 def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, current_position: str = "FLAT") -> dict:
     """
-    Sends technical data to Groq Llama-3.3-70b and receives trading signal JSON.
+    Sends technical data + past trade performance memory to Groq Llama-3.3-70b
+    and receives self-adapting trading signal JSON.
     """
+    learning_memory = trade_logger.get_ai_learning_context(limit=5)
+    
     user_prompt = f"""
 ANALYZE MARKET STATE FOR {config.SYMBOL} ({config.TIMEFRAME} Timeframe):
 
@@ -59,6 +66,9 @@ ANALYZE MARKET STATE FOR {config.SYMBOL} ({config.TIMEFRAME} Timeframe):
    - Bollinger Bands: Upper ${indicator_summary['bb_upper']} | Lower ${indicator_summary['bb_lower']}
    - BB Percent %B: {indicator_summary['bb_percent_b']} (Squeeze/Expansion indicator)
 
+[SELF-LEARNING MEMORY FEEDBACK]
+{learning_memory}
+
 Evaluate if there is a high-probability trade opportunity to reach our 0.5%-1% daily growth target while preserving capital. Return raw JSON.
 """
 
@@ -81,7 +91,6 @@ Evaluate if there is a high-probability trade opportunity to reach our 0.5%-1% d
         res = requests.post(GROQ_URL, json=payload, headers=headers, timeout=12)
         if res.status_code == 200:
             content = res.json()["choices"][0]["message"]["content"].strip()
-            # Clean markdown JSON block formatting if present
             if content.startswith("```json"):
                 content = content.replace("```json", "").replace("```", "").strip()
             elif content.startswith("```"):

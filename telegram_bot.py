@@ -2,6 +2,7 @@ import time
 import threading
 import requests
 import config
+import trade_logger
 
 class TelegramNotifier:
     def __init__(self):
@@ -59,10 +60,24 @@ class TelegramNotifier:
         )
         self.send_message(msg)
 
+    def send_performance_report(self):
+        """Sends self-learning performance metrics & history."""
+        summary = trade_logger.get_performance_summary()
+        msg = (
+            f"🧠 *GROQ AI ÖĞRENME & PERFORMANS RAPORU*\n\n"
+            f"📊 *Toplam Tamamlanan İşlem:* {summary['total_trades']}\n"
+            f"🟢 *Başarılı İşlemler (Kâr):* {summary['wins']}\n"
+            f"🔴 *Başarısız İşlemler (Zarar):* {summary['losses']}\n"
+            f"🎯 *Kazanma Oranı (Win Rate):* %{summary['win_rate_pct']}\n"
+            f"💵 *Toplam Geçmiş PnL:* ${summary['total_pnl_usdt']:+.2f} USDT\n\n"
+            f"💡 *Yapay Zeka Hafızası:* Tamamlanan tüm işlemler kaydedilmekte ve sonraki analizlerde Groq promptuna beslenmektedir."
+        )
+        self.send_message(msg)
+
     def listen_for_commands(self, bot_controller):
         """
         Background listener for incoming Telegram commands:
-        /status, /analyze, /balance, /close, /help
+        /status, /analyze, /balance, /performance, /close, /help
         """
         def poll_updates():
             while True:
@@ -79,7 +94,6 @@ class TelegramNotifier:
                             text = message.get("text", "").strip()
                             from_id = str(message.get("from", {}).get("id", ""))
                             
-                            # Authorize chat ID
                             if from_id != str(self.chat_id):
                                 continue
                                 
@@ -88,6 +102,7 @@ class TelegramNotifier:
                                     "🤖 *BINANCE AI TRADING BOT KOMUTLARI*\n\n"
                                     "/status - Anlık fiyat, indikatörler, pozisyon ve kasa durumu\n"
                                     "/analyze - Anında Groq AI teknik analizi tetikle\n"
+                                    "/performance - Yapay zeka öğrenme verilerini ve başarım oranını gör\n"
                                     "/balance - Bakiye ve günlük PnL bilgisini göster\n"
                                     "/close - Aktif pozisyonu hemen piyasa fiyatından kapat\n"
                                     "/pause - Otomatik taramayı geçici duraklat\n"
@@ -101,6 +116,9 @@ class TelegramNotifier:
                             elif text.startswith("/analyze"):
                                 self.send_message("🔍 *Groq AI Analizi Tetiklendi... Lütfen bekleyin.*")
                                 bot_controller.trigger_manual_ai_analysis()
+
+                            elif text.startswith("/performance"):
+                                self.send_performance_report()
                                 
                             elif text.startswith("/balance"):
                                 bot_controller.send_telegram_balance()
@@ -118,7 +136,6 @@ class TelegramNotifier:
                                 self.send_message("▶️ *Bot otomatik taraması tekrar başlatıldı.*")
                                 
                 except Exception as e:
-                    # Ignore polling network hiccups
                     pass
                 time.sleep(2)
 
