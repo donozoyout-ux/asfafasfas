@@ -126,7 +126,8 @@ class BinanceFuturesExecutor:
             "side": order_side,
             "type": "STOP_MARKET",
             "stopPrice": round(stop_price, 2),
-            "closePosition": "true"
+            "quantity": quantity,
+            "workingType": "MARK_PRICE"
         }
         query = self._sign_request(params)
         url = f"{self.base_url}{endpoint}?{query}"
@@ -138,7 +139,8 @@ class BinanceFuturesExecutor:
                 print(f"[SUCCESS] Stop Loss order set at ${stop_price:.2f}")
                 return data
             else:
-                print(f"[WARN] Stop Loss order warning {res.status_code}: {res.text}")
+                # Try algo order fallback if standard order requires algo endpoint
+                return self._place_algo_sl_tp(symbol, order_side, "STOP_MARKET", stop_price)
         except Exception as e:
             print(f"[EXCEPT] Stop Loss order exception: {e}")
         return {}
@@ -152,7 +154,8 @@ class BinanceFuturesExecutor:
             "side": order_side,
             "type": "TAKE_PROFIT_MARKET",
             "stopPrice": round(tp_price, 2),
-            "closePosition": "true"
+            "quantity": quantity,
+            "workingType": "MARK_PRICE"
         }
         query = self._sign_request(params)
         url = f"{self.base_url}{endpoint}?{query}"
@@ -164,9 +167,35 @@ class BinanceFuturesExecutor:
                 print(f"[SUCCESS] Take Profit order set at ${tp_price:.2f}")
                 return data
             else:
-                print(f"[WARN] Take Profit order warning {res.status_code}: {res.text}")
+                return self._place_algo_sl_tp(symbol, order_side, "TAKE_PROFIT_MARKET", tp_price)
         except Exception as e:
             print(f"[EXCEPT] Take Profit order exception: {e}")
+        return {}
+
+    def _place_algo_sl_tp(self, symbol: str, side: str, order_type: str, trigger_price: float) -> dict:
+        """Fallback for Binance Futures Algo Order API."""
+        endpoint = "/fapi/v1/algo/futures/newOrder"
+        params = {
+            "symbol": symbol,
+            "side": side,
+            "type": order_type,
+            "triggerPrice": round(trigger_price, 2),
+            "algoType": "CONDITIONAL",
+            "workingType": "MARK_PRICE"
+        }
+        query = self._sign_request(params)
+        url = f"{self.base_url}{endpoint}?{query}"
+
+        try:
+            res = requests.post(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                print(f"[SUCCESS] Algo {order_type} set at ${trigger_price:.2f}")
+                return data
+            else:
+                print(f"[WARN] Algo {order_type} notice {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[EXCEPT] Algo order error: {e}")
         return {}
 
     def cancel_all_open_orders(self, symbol: str = config.SYMBOL):
