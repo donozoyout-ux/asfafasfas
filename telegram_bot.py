@@ -104,6 +104,7 @@ class TelegramNotifier:
                                     "/analyze - Anında Groq AI teknik analizi tetikle\n"
                                     "/performance - Yapay zeka öğrenme verilerini ve başarım oranını gör\n"
                                     "/balance - Bakiye ve günlük PnL bilgisini göster\n"
+                                    "/forcetrade - Binance Testnet'te ANINDA test işlemi aç\n"
                                     "/close - Aktif pozisyonu hemen piyasa fiyatından kapat\n"
                                     "/pause - Otomatik taramayı geçici duraklat\n"
                                     "/resume - Otomatik taramayı tekrar başlat"
@@ -123,6 +124,10 @@ class TelegramNotifier:
                             elif text.startswith("/balance"):
                                 bot_controller.send_telegram_balance()
                                 
+                            elif text.startswith("/forcetrade"):
+                                self.send_message("⚡ *Manuel Test İşlemi Tetikleniyor...*")
+                                bot_controller.force_test_trade()
+
                             elif text.startswith("/close"):
                                 self.send_message("⚠️ *Aktif pozisyon kapatılıyor...*")
                                 bot_controller.manual_close_position()

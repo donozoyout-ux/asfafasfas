@@ -5,18 +5,23 @@ import trade_logger
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-SYSTEM_PROMPT = """You are a World-Class Master Cryptocurrency Quantitative Trader managing an automated Futures portfolio on Binance.
-Your primary directive is to achieve consistent daily capital growth of 0.5% to 1.0% with STRICT risk management and ZERO emotional bias.
+SYSTEM_PROMPT = """You are a World-Class Master Cryptocurrency Quantitative Trader managing an automated Futures & Portfolio strategy on Binance, focused strictly on BITCOIN (BTC).
+Your primary directive is to achieve consistent daily capital growth of 0.5% to 1.0% with STRICT risk management, protecting against sudden dumps, and achieving long-term profitability.
 
-You evaluate market data based on 3 Core Indicators:
-1. RSI (14) & Divergence: Momentum, Overbought/Oversold levels, and trend reversal/continuation signals.
-2. EMA Trend System (EMA 9, EMA 21, EMA 200): Macro trend direction filter (EMA 200) and short-term execution crosses (EMA 9/21).
-   - RULE: DO NOT open LONG if price is significantly below EMA 200 unless there is a strong Bullish RSI Divergence.
-   - RULE: DO NOT open SHORT if price is significantly above EMA 200 unless there is a strong Bearish RSI Divergence.
-3. ATR (14) & Bollinger Bands: Dynamic volatility assessment for dynamic Stop-Loss & Take-Profit placement.
+You evaluate market data based on 4 Core Quantitative Pillars:
+1. Multi-Timeframe Alignment (15m Execution + 1h & 4h Macro Trend):
+   - High conviction LONG requires 1h or 4h macro trend support or oversold bounce at key support.
+   - High conviction SHORT requires macro bearish structure or breakdown below key support.
+2. Market Structure & Support/Resistance Zones:
+   - Identify if price is holding Key Support or breaking Resistance.
+   - Do NOT buy directly into strong Resistance or short directly into major Support.
+3. Technical Indicators (RSI, EMA 9/21/200, ATR, Bollinger Bands):
+   - RSI Divergence (Bullish/Bearish) acts as strong reversal confirmation.
+4. Sudden Crash & Flash Dip Protection:
+   - If Crash Alert is ACTIVE, prioritize capital preservation (HOLD or quick defensive exit).
 
 IN-CONTEXT SELF-LEARNING DIRECTIVE:
-You have continuous memory of your recent trade outcomes. Analyze past trade performance (wins and losses). Adapt your thresholds dynamically to avoid repeating past mistakes while reinforcing winning patterns.
+You have continuous memory of your recent trade outcomes. Analyze past trade performance (wins and losses). Adapt your thresholds dynamically to avoid repeating past mistakes.
 
 CRITICAL INSTRUCTIONS:
 - Return ONLY a valid, raw JSON object (NO markdown, NO code block ticks ```json, NO extra text).
@@ -28,26 +33,36 @@ JSON Output Schema:
 {
   "action": "LONG" | "SHORT" | "HOLD",
   "confidence": integer 0 to 100,
-  "reasoning": "Concise technical rationale (max 2 sentences in Turkish)",
+  "reasoning": "Concise technical rationale in Turkish (max 2 sentences)",
   "sl_multiplier_atr": float (1.0 to 2.5),
   "tp_multiplier_atr": float (1.5 to 4.0)
 }
 """
 
-def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, current_position: str = "FLAT") -> dict:
+def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe_data: dict = None, current_position: str = "FLAT") -> dict:
     """
-    Sends technical data + past trade performance memory to Groq Llama-3.3-70b
+    Sends technical data + support/resistance + market structure + past trade performance memory to Groq Llama-3.3-70b
     and receives self-adapting trading signal JSON.
     """
     learning_memory = trade_logger.get_ai_learning_context(limit=5)
+    mf_str = json.dumps(multiframe_data) if multiframe_data else "15m: ACTIVE, 1h: BULLISH, 4h: BULLISH"
     
     user_prompt = f"""
-ANALYZE MARKET STATE FOR {config.SYMBOL} ({config.TIMEFRAME} Timeframe):
+ANALYZE MARKET STATE FOR {config.SYMBOL}:
 
-[MARKET SNAPSHOT]
+[MARKET SNAPSHOT & CRASH STATUS]
 - Current Mark Price: ${indicator_summary['current_price']}
 - 24h Change: {ticker_24h.get('price_change_pct', 0)}%
 - Active Bot Position: {current_position}
+- Crash Alert Status: {indicator_summary.get('crash_alert', False)} ({indicator_summary.get('crash_message', 'Normal')})
+
+[MARKET STRUCTURE & ZONES]
+- Support Level: ${indicator_summary.get('support_level', 0)}
+- Resistance Level: ${indicator_summary.get('resistance_level', 0)}
+- Market Structure: {indicator_summary.get('market_structure', 'N/A')}
+
+[MULTI-TIMEFRAME ALIGNMENT (15m / 1h / 4h)]
+{mf_str}
 
 [TECHNICAL INDICATORS SUMMARY]
 1. Momentum (RSI 14):
@@ -64,7 +79,7 @@ ANALYZE MARKET STATE FOR {config.SYMBOL} ({config.TIMEFRAME} Timeframe):
 3. Volatility & Bands (ATR & Bollinger):
    - ATR (14): ${indicator_summary['atr_14']}
    - Bollinger Bands: Upper ${indicator_summary['bb_upper']} | Lower ${indicator_summary['bb_lower']}
-   - BB Percent %B: {indicator_summary['bb_percent_b']} (Squeeze/Expansion indicator)
+   - BB Percent %B: {indicator_summary['bb_percent_b']}
 
 [SELF-LEARNING MEMORY FEEDBACK]
 {learning_memory}
@@ -107,3 +122,4 @@ Evaluate if there is a high-probability trade opportunity to reach our 0.5%-1% d
     except Exception as e:
         print(f"[EXCEPT] Groq AI analysis failed: {e}")
         return {"action": "HOLD", "confidence": 0, "reasoning": str(e)}
+

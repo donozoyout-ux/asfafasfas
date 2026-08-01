@@ -67,3 +67,23 @@ def fetch_24h_ticker(symbol: str = config.SYMBOL) -> dict:
     except Exception as e:
         print(f"[EXCEPT] Error fetching 24h ticker: {e}")
     return {}
+
+def fetch_multiframe_data(symbol: str = config.SYMBOL) -> dict:
+    """Fetches klines for 15m, 1h, and 4h to construct multi-timeframe analysis."""
+    frames = {"15m": "15m", "1h": "1h", "4h": "4h"}
+    result = {}
+    for label, interval in frames.items():
+        df = fetch_klines(symbol, interval, limit=50)
+        if not df.empty:
+            close = df['close'].iloc[-1]
+            ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            trend = "BULLISH" if close > ema50 else "BEARISH"
+            result[label] = {
+                "trend": trend,
+                "last_close": round(float(close), 2),
+                "ema50": round(float(ema50), 2)
+            }
+        else:
+            result[label] = {"trend": "UNKNOWN", "last_close": 0, "ema50": 0}
+    return result
+

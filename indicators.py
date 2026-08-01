@@ -42,7 +42,6 @@ def calculate_bollinger_bands(df: pd.DataFrame, period: int = 20, std_dev: float
     lower_band = sma - (std * std_dev)
     bandwidth = (upper_band - lower_band) / sma
     percent_b = (df['close'] - lower_band) / (upper_band - lower_band + 1e-10)
-    
     return upper_band, sma, lower_band, bandwidth, percent_b
 
 def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
@@ -51,12 +50,11 @@ def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
     Bullish Divergence: Price makes Lower Low, RSI makes Higher Low.
     Bearish Divergence: Price makes Higher High, RSI makes Lower High.
     """
-    if len(df) < lookback:
+    if len(df) < lookback or 'rsi' not in df.columns:
         return "NONE"
     
     recent_df = df.iloc[-lookback:].copy()
     
-    # Check last 5 candles vs previous 15
     p_min1 = recent_df['close'].iloc[-5:].min()
     p_min2 = recent_df['close'].iloc[:-5].min()
     
@@ -76,12 +74,67 @@ def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
     
     return "NONE"
 
+def calculate_support_resistance(df: pd.DataFrame, window: int = 15) -> tuple:
+    """Calculates dynamic Support and Resistance levels from recent swing points."""
+    if len(df) < window * 2:
+        current = df['close'].iloc[-1]
+        return current * 0.98, current * 1.02
+        
+    recent_df = df.iloc[-window*3:]
+    highs = recent_df['high'].values
+    lows = recent_df['low'].values
+    
+    resistance = float(np.max(highs))
+    support = float(np.min(lows))
+    
+    return round(support, 2), round(resistance, 2)
+
+def detect_market_structure(df: pd.DataFrame) -> str:
+    """Detects Market Structure (BULLISH_STRUCTURE, BEARISH_STRUCTURE, or CONSOLIDATION)."""
+    if len(df) < 15:
+        return "CONSOLIDATION"
+        
+    recent = df.iloc[-10:]
+    highs = recent['high'].values
+    lows = recent['low'].values
+    
+    first_half_h = np.max(highs[:5])
+    second_half_h = np.max(highs[5:])
+    first_half_l = np.min(lows[:5])
+    second_half_l = np.min(lows[5:])
+    
+    if second_half_h > first_half_h and second_half_l > first_half_l:
+        return "BULLISH_STRUCTURE (Higher Highs & Higher Lows)"
+    elif second_half_h < first_half_h and second_half_l < first_half_l:
+        return "BEARISH_STRUCTURE (Lower Highs & Lower Lows)"
+    else:
+        return "CONSOLIDATION / SIDEWAYS"
+
+def detect_crash_risk(df: pd.DataFrame) -> dict:
+    """Detects rapid flash crashes or sudden high volume sell-offs."""
+    if len(df) < 5:
+        return {"crash_alert": False, "message": "Normal market volatility"}
+        
+    last_candle = df.iloc[-1]
+    prev_candle = df.iloc[-2]
+    
+    pct_drop_1c = ((last_candle['close'] - last_candle['open']) / last_candle['open']) * 100
+    three_candle_drop = ((last_candle['close'] - df.iloc[-4]['open']) / df.iloc[-4]['open']) * 100
+    
+    if pct_drop_1c < -1.8 or three_candle_drop < -3.0:
+        return {
+            "crash_alert": True,
+            "message": f"🚨 FLASH DIP DETECTED! Price dropped {pct_drop_1c:.2f}% rapidly. Extreme caution."
+        }
+    return {"crash_alert": False, "message": "Normal market volatility"}
+
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Computes all 3 primary indicators and enriches DataFrame:
+    Computes all primary technical indicators and enriches DataFrame:
     1. RSI (14) & Divergence
     2. EMA 9, EMA 21, EMA 200 (Trend Alignment)
     3. ATR (14) & Bollinger Bands
+    4. Support/Resistance & Market Structure
     """
     df = df.copy()
     
@@ -128,6 +181,10 @@ def get_latest_indicator_summary(df: pd.DataFrame) -> dict:
     else:
         rsi_status = "NEUTRAL"
         
+    support, resistance = calculate_support_resistance(df)
+    market_structure = detect_market_structure(df)
+    crash_info = detect_crash_risk(df)
+    
     return {
         "current_price": float(latest['close']),
         "rsi_14": round(rsi_val, 2),
@@ -143,5 +200,11 @@ def get_latest_indicator_summary(df: pd.DataFrame) -> dict:
         "bb_lower": round(float(latest['bb_lower']), 2),
         "bb_bandwidth": round(float(latest['bb_bandwidth']), 4),
         "bb_percent_b": round(float(latest['bb_percent_b']), 2),
+        "support_level": support,
+        "resistance_level": resistance,
+        "market_structure": market_structure,
+        "crash_alert": crash_info["crash_alert"],
+        "crash_message": crash_info["message"],
         "volume_change_pct": round(((float(latest['volume']) - float(prev['volume'])) / (float(prev['volume']) + 1e-5)) * 100, 2)
     }
+
