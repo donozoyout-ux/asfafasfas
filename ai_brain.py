@@ -39,13 +39,14 @@ JSON Output Schema:
 }
 """
 
-def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe_data: dict = None, current_position: str = "FLAT") -> dict:
+def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe_data: dict = None, tradingview_data: dict = None, current_position: str = "FLAT") -> dict:
     """
-    Sends technical data + support/resistance + market structure + past trade performance memory to Groq Llama-3.3-70b
-    and receives self-adapting trading signal JSON.
+    Sends technical data + TradingView TA ratings + support/resistance + market structure + past trade performance memory
+    to Groq Llama-3.3-70b and receives self-adapting trading signal JSON.
     """
     learning_memory = trade_logger.get_ai_learning_context(limit=5)
     mf_str = json.dumps(multiframe_data) if multiframe_data else "15m: ACTIVE, 1h: BULLISH, 4h: BULLISH"
+    tv_str = json.dumps(tradingview_data) if tradingview_data else "TradingView: N/A"
     
     user_prompt = f"""
 ANALYZE MARKET STATE FOR {config.SYMBOL}:
@@ -55,6 +56,9 @@ ANALYZE MARKET STATE FOR {config.SYMBOL}:
 - 24h Change: {ticker_24h.get('price_change_pct', 0)}%
 - Active Bot Position: {current_position}
 - Crash Alert Status: {indicator_summary.get('crash_alert', False)} ({indicator_summary.get('crash_message', 'Normal')})
+
+[TRADINGVIEW OFFICIAL TECHNICAL ANALYSIS RATINGS]
+{tv_str}
 
 [MARKET STRUCTURE & ZONES]
 - Support Level: ${indicator_summary.get('support_level', 0)}

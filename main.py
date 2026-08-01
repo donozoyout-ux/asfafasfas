@@ -12,6 +12,7 @@ import market_data
 import indicators
 import ai_brain
 import trade_logger
+import tradingview_service
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -83,6 +84,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+
+        elif self.path in ["/webhook/tradingview", "/api/webhook/tradingview"]:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                alert = json.loads(post_data.decode('utf-8'))
+                action = str(alert.get("action", "")).upper()
+                print(f"\n[TRADINGVIEW WEBHOOK RECEIVED] Alert Signal: {action}")
+                
+                if bot_instance:
+                    if action in ["BUY", "LONG"]:
+                        bot_instance.force_test_trade()
+                        msg = "TradingView Webhook: LONG Signal Received & Executed!"
+                    elif action in ["SELL", "SHORT"]:
+                        bot_instance.force_test_trade()
+                        msg = "TradingView Webhook: SHORT Signal Received & Executed!"
+                    elif action == "CLOSE":
+                        bot_instance.manual_close_position()
+                        msg = "TradingView Webhook: Close Signal Received!"
+                    else:
+                        msg = f"TradingView Alert Received: {action}"
+
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "message": msg}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": f"Invalid webhook payload: {e}"}).encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()
@@ -114,6 +145,7 @@ class BotController:
         self.latest_summary = {}
         self.multiframe_summary = {}
         self.ticker_24h = {}
+        self.latest_tradingview = {}
         self.latest_balance = 5000.0
         self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
         self.latest_ai_decision = {"action": "HOLD", "confidence": 0, "reasoning": "Sistem başlatılıyor..."}
@@ -159,14 +191,23 @@ class BotController:
         ind_summary = indicators.get_latest_indicator_summary(df_analyzed)
         ticker_24h = market_data.fetch_24h_ticker(config.SYMBOL)
         mf_data = market_data.fetch_multiframe_data(config.SYMBOL)
+        tv_data = tradingview_service.fetch_tradingview_analysis(config.SYMBOL)
         
-        ai_res = ai_brain.analyze_market_with_ai(ind_summary, ticker_24h, multiframe_data=mf_data, current_position=self.latest_position["side"])
+        ai_res = ai_brain.analyze_market_with_ai(
+            ind_summary,
+            ticker_24h,
+            multiframe_data=mf_data,
+            tradingview_data=tv_data,
+            current_position=self.latest_position["side"]
+        )
         self.latest_ai_decision = ai_res
+        self.latest_tradingview = tv_data
         
         report = (
             f"🧠 *ANLIK GROQ AI TEKNİK ANALİZ RAPORU*\n\n"
             f"🪙 *Fiyat:* ${ind_summary['current_price']:.2f}\n"
             f"📈 *RSI (14):* {ind_summary['rsi_14']} ({ind_summary['rsi_status']}) | Div: {ind_summary['rsi_divergence']}\n"
+            f"📊 *TradingView Uyum:* {tv_data.get('consensus', 'N/A')}\n"
             f"🛡️ *Destek:* ${ind_summary['support_level']} | 🎯 *Direnç:* ${ind_summary['resistance_level']}\n"
             f"📐 *Market Yapısı:* {ind_summary['market_structure']}\n\n"
             f"🎯 *AI Tavsiyesi:* [{ai_res.get('action')}] (%{ai_res.get('confidence')} Güven)\n"
@@ -179,7 +220,7 @@ class BotController:
         current_price = self.latest_summary.get('current_price', 60000.0)
         atr_14 = self.latest_summary.get('atr_14', 500.0)
         side = "LONG"
-        qty = 0.002  # Safe micro lot size for test
+        qty = 0.002
         sl_price = round(current_price - (1.5 * atr_14), 2)
         tp_price = round(current_price + (2.5 * atr_14), 2)
 
@@ -192,7 +233,7 @@ class BotController:
             sl_price=sl_price,
             tp_price=tp_price,
             ai_confidence=99,
-            ai_reasoning="Kullanıcı tarafından Web Panel / Telegram üzerinden tetiklenen test işlemi.",
+            ai_reasoning="Kullanıcı / TradingView Webhook tarafından tetiklenen test işlemi.",
             indicator_summary=self.latest_summary
         )
 
@@ -208,7 +249,7 @@ class BotController:
                     qty=qty,
                     sl=sl_price,
                     tp=tp_price,
-                    reasoning="Binance Futures Testnet üzerinde manuel test işlemi başarıyla açıldı!"
+                    reasoning="Binance Futures Testnet üzerinde test işlemi açıldı!"
                 )
         else:
             self.notifier.send_trade_alert(
@@ -252,6 +293,7 @@ class BotController:
                 "crash_alert": self.latest_summary.get("crash_alert", False),
                 "crash_message": self.latest_summary.get("crash_message", "Normal")
             },
+            "tradingview": self.latest_tradingview,
             "ai_decision": self.latest_ai_decision,
             "multiframe": self.multiframe_summary,
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -261,7 +303,6 @@ class BotController:
         print_banner()
         trade_logger.init_db()
         
-        # Start Telegram command listener in background
         self.notifier.listen_for_commands(self)
         
         if not self.dry_run:
@@ -294,9 +335,9 @@ class BotController:
                     
                 cycle_count += 1
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"\n--- [Cycle #{cycle_count} | {now_str}] Fetching Market Data ---")
+                print(f"\n--- [Cycle #{cycle_count} | {now_str}] Fetching Market Data & TradingView TA ---")
                 
-                # 1. Fetch Market Data & Calculate Indicators
+                # 1. Fetch Market Data, Indicators & TradingView Analysis
                 df = market_data.fetch_klines(config.SYMBOL, config.TIMEFRAME, config.KLINE_LIMIT)
                 if df.empty:
                     print("[WARN] Could not fetch market data. Retrying in 10s...")
@@ -307,11 +348,11 @@ class BotController:
                 self.latest_summary = indicators.get_latest_indicator_summary(df_analyzed)
                 self.ticker_24h = market_data.fetch_24h_ticker(config.SYMBOL)
                 self.multiframe_summary = market_data.fetch_multiframe_data(config.SYMBOL)
+                self.latest_tradingview = tradingview_service.fetch_tradingview_analysis(config.SYMBOL)
                 
                 print(f"📊 {config.SYMBOL} Mark Price: ${self.latest_summary['current_price']:.2f}")
-                print(f"📈 RSI(14): {self.latest_summary['rsi_14']} [{self.latest_summary['rsi_status']}] | Div: {self.latest_summary['rsi_divergence']}")
-                print(f"🔹 EMAs: 9=${self.latest_summary['ema_9']} | 21=${self.latest_summary['ema_21']} | 200=${self.latest_summary['ema_200']} ({self.latest_summary['macro_trend_ema200']})")
-                print(f"🛡️ Support: ${self.latest_summary['support_level']} | Resistance: ${self.latest_summary['resistance_level']}")
+                print(f"📈 RSI(14): {self.latest_summary['rsi_14']} [{self.latest_summary['rsi_status']}]")
+                print(f"📡 TradingView TA Consensus: {self.latest_tradingview.get('consensus', 'N/A')}")
                 
                 # 2. Check Active Position & Balance
                 if not self.dry_run:
@@ -320,7 +361,6 @@ class BotController:
                 else:
                     self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
 
-                # Detect position close event for self-learning log
                 if previous_position_side != "FLAT" and self.latest_position["side"] == "FLAT":
                     print("[INFO] Position closed! Updating trade performance logger...")
                     if self.active_trade_id:
@@ -348,12 +388,13 @@ class BotController:
                         time.sleep(config.CHECK_INTERVAL_SECONDS)
                         continue
 
-                    # 3. Request Groq AI Trading Decision
-                    print("🧠 Consulting Groq Llama-3.3 AI Brain for technical decision...")
+                    # 3. Request Groq AI Decision with TradingView Context
+                    print("🧠 Consulting Groq Llama-3.3 AI Brain...")
                     ai_decision = ai_brain.analyze_market_with_ai(
                         self.latest_summary,
                         self.ticker_24h,
                         multiframe_data=self.multiframe_summary,
+                        tradingview_data=self.latest_tradingview,
                         current_position=self.latest_position["side"]
                     )
                     self.latest_ai_decision = ai_decision
@@ -367,7 +408,7 @@ class BotController:
                     print(f"🤖 AI Recommendation: [{action}] (Confidence: {confidence}%)")
                     print(f"💬 AI Reasoning: {reasoning}")
                     
-                    # 4. Execute Trade if High Conviction (Action in [LONG, SHORT] and confidence >= 70%)
+                    # 4. Execute Trade if High Conviction
                     if action in ["LONG", "SHORT"] and confidence >= 70:
                         trade_params = risk_mgr.calculate_position_parameters(
                             account_balance=self.latest_balance,
@@ -379,12 +420,6 @@ class BotController:
                         )
                         
                         print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")
-                        print(f"   Action       : {action}")
-                        print(f"   Qty (BTC)    : {trade_params['quantity']}")
-                        print(f"   Est. Entry   : ${trade_params['entry_price']}")
-                        print(f"   Stop Loss    : ${trade_params['sl_price']} (Risk: ${trade_params['risk_usdt']})")
-                        print(f"   Take Profit  : ${trade_params['tp_price']} (RR Ratio: 1:{trade_params['risk_reward_ratio']})")
-                        
                         self.active_trade_id = trade_logger.log_trade_entry(
                             symbol=config.SYMBOL,
                             side=action,
@@ -398,7 +433,6 @@ class BotController:
                         )
                         
                         if not self.dry_run:
-                            print(f"🚀 Executing {action} order on Binance Futures Testnet...")
                             order_side = "BUY" if action == "LONG" else "SELL"
                             market_order = self.executor.place_market_order(config.SYMBOL, order_side, trade_params['quantity'])
                             
@@ -416,7 +450,6 @@ class BotController:
                                     reasoning=reasoning
                                 )
                         else:
-                            print("🧪 [DRY-RUN] Order simulation complete.")
                             self.notifier.send_trade_alert(
                                 action=f"[DRY-RUN] {action}",
                                 price=trade_params['entry_price'],
@@ -428,7 +461,7 @@ class BotController:
                     else:
                         print("⌛ Decision: HOLD. Waiting for higher conviction setup...")
 
-                print(f"😴 Sleeping for {config.CHECK_INTERVAL_SECONDS} seconds before next check...\n")
+                print(f"😴 Sleeping for {config.CHECK_INTERVAL_SECONDS} seconds...\n")
                 time.sleep(config.CHECK_INTERVAL_SECONDS)
                 
             except KeyboardInterrupt:
@@ -439,7 +472,7 @@ class BotController:
                 time.sleep(10)
 
 def render_dashboard_html() -> str:
-    """Returns the full HTML, CSS, and JS code for the Web Dashboard Panel."""
+    """Returns the full HTML, CSS, and JS code for the Web Dashboard Panel with embedded TradingView widgets."""
     return """<!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -461,7 +494,7 @@ def render_dashboard_html() -> str:
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background: var(--bg-main); color: var(--text-main); padding: 20px; min-height: 100vh; }
-        .container { max-width: 1350px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; }
         
         /* Header */
         header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--card-border); margin-bottom: 25px; }
@@ -489,7 +522,7 @@ def render_dashboard_html() -> str:
 
         /* Controls */
         .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 15px; }
-        .btn { padding: 12px; border: none; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .btn { padding: 12px; border: none; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: justify; gap: 8px; text-decoration: none; justify-content: center; }
         .btn-blue { background: var(--accent-blue); color: #fff; }
         .btn-green { background: var(--accent-green); color: #fff; }
         .btn-yellow { background: var(--accent-yellow); color: #000; }
@@ -503,6 +536,9 @@ def render_dashboard_html() -> str:
         
         .pnl-positive { color: var(--accent-green); font-weight: 700; }
         .pnl-negative { color: var(--accent-red); font-weight: 700; }
+
+        /* TradingView Chart Container */
+        .tv-chart-box { margin-bottom: 25px; height: 500px; border-radius: 14px; overflow: hidden; border: 1px solid var(--card-border); }
     </style>
 </head>
 <body>
@@ -510,7 +546,7 @@ def render_dashboard_html() -> str:
         <header>
             <div class="logo-box">
                 <h1>⚡ BINANCE AI TRADER</h1>
-                <span class="badge online">● RENDER 24/7 CLOUD ACTIVE</span>
+                <span class="badge online">● TRADINGVIEW & RENDER 24/7 CONNECTED</span>
             </div>
             <div>
                 <span class="badge" id="bot-status">Yükleniyor...</span>
@@ -531,15 +567,41 @@ def render_dashboard_html() -> str:
                 <div style="font-size:0.82rem; margin-top:4px;" id="daily-pnl">Günlük PnL: $0.00 (%0.00)</div>
             </div>
             <div class="card">
-                <div class="card-label">Günlük Hedef & Limitler</div>
-                <div class="card-val" style="color:var(--accent-green);">%1.0 Target</div>
-                <div style="font-size:0.82rem; margin-top:4px; color:var(--accent-red);">Max Stop Limit: %3.0</div>
+                <div class="card-label">TradingView Consensus</div>
+                <div class="card-val" id="tv-consensus-val" style="color:var(--accent-yellow); font-size:1.3rem;">NEUTRAL</div>
+                <div style="font-size:0.82rem; margin-top:4px;" id="tv-details">15m / 1h / 4h Analizi</div>
             </div>
             <div class="card">
                 <div class="card-label">Aktif Pozisyon</div>
                 <div class="card-val" id="pos-side">FLAT</div>
                 <div style="font-size:0.82rem; margin-top:4px;" id="pos-details">Açık pozisyon yok</div>
             </div>
+        </div>
+
+        <!-- TradingView Embedded Interactive Chart -->
+        <div class="card tv-chart-box">
+            <!-- TradingView Widget BEGIN -->
+            <div class="tradingview-widget-container" style="height:100%;width:100%;">
+              <div id="tradingview_chart" style="height:calc(100% - 32px);width:100%;"></div>
+              <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+              <script type="text/javascript">
+              new TradingView.widget({
+                  "autosize": true,
+                  "symbol": "BINANCE:BTCUSDT",
+                  "interval": "15",
+                  "timezone": "Europe/Istanbul",
+                  "theme": "dark",
+                  "style": "1",
+                  "locale": "tr",
+                  "toolbar_bg": "#151a23",
+                  "enable_publishing": false,
+                  "hide_side_toolbar": false,
+                  "allow_symbol_change": true,
+                  "container_id": "tradingview_chart"
+              });
+              </script>
+            </div>
+            <!-- TradingView Widget END -->
         </div>
 
         <!-- Middle Grid: AI Conviction & Technical Matrix -->
@@ -562,14 +624,14 @@ def render_dashboard_html() -> str:
 
             <!-- Technical Analysis & Market Structure -->
             <div class="card">
-                <div class="card-label">📈 Teknik İndikatörler & Market Yapısı</div>
+                <div class="card-label">📈 TradingView & Teknik İndikatör Matrix</div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px; font-size:0.9rem;">
                     <div><b>RSI (14):</b> <span id="rsi-val">-</span></div>
                     <div><b>EMA 200:</b> <span id="ema-200">-</span></div>
                     <div><b>Destek Seviyesi:</b> <span id="support-val" style="color:var(--accent-green);">-</span></div>
                     <div><b>Direnç Seviyesi:</b> <span id="resistance-val" style="color:var(--accent-red);">-</span></div>
                     <div><b>Market Yapısı:</b> <span id="market-struct">-</span></div>
-                    <div><b>1h / 4h Trend:</b> <span id="mf-trend">-</span></div>
+                    <div><b>TradingView Consensus:</b> <span id="tv-summary-str">-</span></div>
                 </div>
                 <div id="crash-alert-box" style="margin-top:14px; padding:10px; border-radius:8px; background:rgba(0,192,135,0.1); color:var(--accent-green); font-size:0.85rem; font-weight:600;">
                     ✅ Market Durumu Normal (Ani Çakılma Riski Yok)
@@ -626,6 +688,12 @@ def render_dashboard_html() -> str:
                     document.getElementById('pos-details').innerText = 'Açık pozisyon yok';
                 }
 
+                const tv = d.tradingview || {};
+                const tvConsensus = tv.consensus || '15m: NEUTRAL | 1h: NEUTRAL';
+                document.getElementById('tv-consensus-val').innerText = tv['15m']?.recommendation || 'NEUTRAL';
+                document.getElementById('tv-details').innerText = tvConsensus;
+                document.getElementById('tv-summary-str').innerText = tvConsensus;
+
                 const ai = d.ai_decision || {};
                 const aiBadge = document.getElementById('ai-action');
                 aiBadge.innerText = `${ai.action || 'HOLD'} (%${ai.confidence || 0} Güven)`;
@@ -638,9 +706,6 @@ def render_dashboard_html() -> str:
                 document.getElementById('support-val').innerText = `$${ind.support || 0}`;
                 document.getElementById('resistance-val').innerText = `$${ind.resistance || 0}`;
                 document.getElementById('market-struct').innerText = ind.market_structure || 'Normal';
-
-                const mf = d.multiframe || {};
-                document.getElementById('mf-trend').innerText = `1h: ${mf['1h']?.trend || '-'}, 4h: ${mf['4h']?.trend || '-'}`;
 
                 const crashBox = document.getElementById('crash-alert-box');
                 if(ind.crash_alert) {
@@ -719,6 +784,7 @@ def print_banner():
     print(f" Symbol         : {config.SYMBOL}")
     print(f" Timeframe      : {config.TIMEFRAME}")
     print(f" Leverage       : {config.LEVERAGE}x")
+    print(f" TradingView    : Connected (Live Widgets + TA Engine + Webhook API)")
     print(f" Web Dashboard  : Bound to Port {RENDER_PORT}")
     print(f" AI Brain       : Groq ({config.GROQ_MODEL}) + Self-Learning DB")
     print(f" Telegram Bot   : Enabled (Chat ID: {config.TELEGRAM_CHAT_ID})")
@@ -731,13 +797,10 @@ if __name__ == "__main__":
     
     bot_instance = BotController(dry_run=args.dry_run)
     
-    # 1. Start HTTP Server for Web Dashboard & Render Health Checks BEFORE anything else
     http_thread = threading.Thread(target=_run_http_server, daemon=True)
     http_thread.start()
     
-    # 2. Start Self-Ping Thread for Render 24/7 Keep-Alive
     ping_thread = threading.Thread(target=_self_ping_loop, daemon=True)
     ping_thread.start()
     
-    # 3. Start Main Bot Controller Loop
     bot_instance.start()
