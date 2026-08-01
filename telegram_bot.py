@@ -12,7 +12,7 @@ class TelegramNotifier:
         self.last_update_id = 0
 
     def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
-        """Sends a message to user's Telegram chat."""
+        """Sends a message to user's Telegram chat with automatic plain-text fallback."""
         url = f"{self.api_url}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
@@ -21,7 +21,12 @@ class TelegramNotifier:
         }
         try:
             res = requests.post(url, json=payload, timeout=10)
-            return res.status_code == 200
+            if res.status_code != 200:
+                # Fallback: Retry without Markdown formatting to bypass character parsing errors
+                payload.pop("parse_mode", None)
+                res_fallback = requests.post(url, json=payload, timeout=10)
+                return res_fallback.status_code == 200
+            return True
         except Exception as e:
             print(f"[EXCEPT] Telegram send_message error: {e}")
             return False
