@@ -44,3 +44,6 @@ ATR_TP_MULTIPLIER = 2.5  # Take Profit = Entry +/- (2.5 * ATR)
 
 # Log / Execution Settings
 CHECK_INTERVAL_SECONDS = 30  # Interval to check position / market state in seconds
+
+# Ollama API Base URL
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
