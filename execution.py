@@ -139,11 +139,11 @@ class BinanceFuturesExecutor:
                 print(f"[SUCCESS] Stop Loss order set at ${stop_price:.2f}")
                 return data
             else:
-                # Try algo order fallback if standard order requires algo endpoint
-                return self._place_algo_sl_tp(symbol, order_side, "STOP_MARKET", stop_price)
+                print(f"[WARN] Stop Loss order failed {res.status_code}: {res.text}")
+                return {}
         except Exception as e:
             print(f"[EXCEPT] Stop Loss order exception: {e}")
-        return {}
+            return {}
 
     def place_take_profit_order(self, symbol: str, position_side: str, tp_price: float, quantity: float) -> dict:
         """Places a TAKE_PROFIT_MARKET order to lock in profit."""
@@ -167,10 +167,11 @@ class BinanceFuturesExecutor:
                 print(f"[SUCCESS] Take Profit order set at ${tp_price:.2f}")
                 return data
             else:
-                return self._place_algo_sl_tp(symbol, order_side, "TAKE_PROFIT_MARKET", tp_price)
+                print(f"[WARN] Take Profit order failed {res.status_code}: {res.text}")
+                return {}
         except Exception as e:
             print(f"[EXCEPT] Take Profit order exception: {e}")
-        return {}
+            return {}
 
     def _place_algo_sl_tp(self, symbol: str, side: str, order_type: str, trigger_price: float) -> dict:
         """Fallback for Binance Futures Algo Order API."""
