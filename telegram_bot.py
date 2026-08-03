@@ -139,10 +139,21 @@ class TelegramNotifier:
                             if text.startswith("/start") or text.startswith("/help"):
                                 help_txt = (
                                     "🤖 *BINANCE AI TRADING BOT KOMUTLARI*\n\n"
+                                    "📊 *ANALİZ & DURUM*\n"
                                     "/status - Anlık fiyat, indikatörler, pozisyon ve kasa durumu\n"
                                     "/analyze - Anında Groq AI teknik analizi tetikle\n"
-                                    "/performance - Yapay zeka öğrenme verilerini ve başarım oranını gör\n"
-                                    "/balance - Bakiye ve günlük PnL bilgisini göster\n"
+                                    "/analysis - DETAYLI analiz: AI neden bu kararı verdi?\n"
+                                    "/indicators - Tüm teknik indikatörlerin özeti\n"
+                                    "/multiframe - Çoklu zaman dilimi trend analizi (15m/1h/4h)\n\n"
+                                    "💰 *BALANCE & POZİSYON*\n"
+                                    "/balance - Bakiye ve günlük PnL bilgisi\n"
+                                    "/position - Aktif pozisyon detayı ve likidasyon fiyatı\n"
+                                    "/performance - Yapay zeka öğrenme ve başarım oranı\n"
+                                    "/history - Son 10 işlem kaydı\n"
+                                    "/risk - Risk yönetimi durumu\n"
+                                    "/daily - Günlük kâr raporu\n"
+                                    "/settings - Bot ayarları ve parametreleri\n\n"
+                                    "⚡ *İŞLEMLER*\n"
                                     "/forcetrade - Binance Testnet'te ANINDA test işlemi aç\n"
                                     "/close - Aktif pozisyonu hemen piyasa fiyatından kapat\n"
                                     "/pause - Otomatik taramayı geçici duraklat\n"
@@ -156,6 +167,30 @@ class TelegramNotifier:
                             elif text.startswith("/analyze"):
                                 self.send_message("🔍 *Groq AI Analizi Tetiklendi... Lütfen bekleyin.*")
                                 bot_controller.trigger_manual_ai_analysis()
+
+                            elif text.startswith("/analysis"):
+                                bot_controller.send_telegram_detailed_analysis()
+
+                            elif text.startswith("/indicators"):
+                                bot_controller.send_telegram_indicators()
+
+                            elif text.startswith("/multiframe"):
+                                bot_controller.send_telegram_multiframe()
+
+                            elif text.startswith("/position"):
+                                bot_controller.send_telegram_position()
+
+                            elif text.startswith("/settings"):
+                                bot_controller.send_telegram_settings()
+
+                            elif text.startswith("/history"):
+                                bot_controller.send_telegram_history()
+
+                            elif text.startswith("/risk"):
+                                bot_controller.send_telegram_risk()
+
+                            elif text.startswith("/daily"):
+                                self.send_daily_report(bot_controller, trade_logger)
 
                             elif text.startswith("/performance"):
                                 self.send_performance_report()

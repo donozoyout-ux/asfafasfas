@@ -199,6 +199,212 @@ class BotController:
         )
         self.notifier.send_message(msg)
 
+    def send_telegram_detailed_analysis(self):
+        """Sends a detailed market analysis explaining WHY the AI made its decision."""
+        ind = self.latest_summary
+        ai = self.latest_ai_decision
+        tv = self.latest_tradingview
+        ticker = self.ticker_24h
+        pos = self.latest_position
+
+        if not ind:
+            self.notifier.send_message("❌ Henüz analiz verisi yok. `/analyze` yazabilirsin.")
+            return
+
+        price = ind.get('current_price', 0)
+        ema9 = ind.get('ema_9', 0)
+        ema21 = ind.get('ema_21', 0)
+        ema200 = ind.get('ema_200', 0)
+
+        # Trend açıklaması
+        trend_text = []
+        trend_text.append(f"• Fiyat ($ {price:.2f}) EMA200'e ($ {ema200:.2f}) göre: {'🟢 BULLISH (üstünde)' if price > ema200 else '🔴 BEARISH (altında)'}")
+        trend_text.append(f"• Kısa vade (EMA9/EMA21): {'🟢 Bullish Cross' if ema9 > ema21 else '🔴 Bearish Cross'}")
+
+        # RSI açıklaması
+        rsi = ind.get('rsi_14', 0)
+        rsi_status = ind.get('rsi_status', 'N/A')
+        rsi_comment = ""
+        if rsi >= 70:
+            rsi_comment = "Aşırı alım (overbought) - geri çekilme riski yüksek"
+        elif rsi <= 30:
+            rsi_comment = "Aşırı satım (oversold) - tepki alımı potansiyeli"
+        elif rsi >= 55:
+            rsi_comment = "Alıcı ağırlıklı, momentum yukarı yönlü"
+        elif rsi <= 45:
+            rsi_comment = "Satıcı ağırlıklı, momentum aşağı yönlü"
+        else:
+            rsi_comment = "Nötr bölge - yön belirsiz"
+
+        # RSI divergence
+        div = ind.get('rsi_divergence', 'NONE')
+        div_comment = ""
+        if div == "BULLISH_DIVERGENCE":
+            div_comment = "🟢 Boğa sapması (yükseliş sinyali)"
+        elif div == "BEARISH_DIVERGENCE":
+            div_comment = "🔴 Ayı sapması (düşüş sinyali)"
+        else:
+            div_comment = "Sapma yok"
+
+        # Crash durumu
+        crash = "🚨 AKTİF - DİKKAT!" if ind.get('crash_alert') else "Normal"
+        if ind.get('crash_alert'):
+            crash += f"\n⚠️ {ind.get('crash_message', '')}"
+
+        pos_str = "YOK (FLAT)"
+        if pos.get("side") != "FLAT":
+            pnl = pos.get('unrealized_pnl', 0)
+            pnl_icon = "🟢" if pnl >= 0 else "🔴"
+            pos_str = f"{pos['side']} {pos['amount']} BTC @ $ {pos['entry_price']:.2f} | UnPNL: {pnl_icon} $ {pnl:+.2f}"
+
+        msg = (
+            f"🔬 *DETAYLI PİYASA ANALİZİ*\n\n"
+            f"📉 *NEDEN BU KARAR?*\n\n"
+            f"1️⃣ *EMA Trend Analizi:*\n{chr(10).join(trend_text)}\n\n"
+            f"2️⃣ *RSI Momentum:* RSI = {rsi} ({rsi_status})\n• {rsi_comment}\n• {div_comment}\n\n"
+            f"3️⃣ *Volatilite (ATR):* ATR = $ {ind.get('atr_14', 0):.2f}\n"
+            f"   → SL/TP mesafeleri bu değerle hesaplanır\n\n"
+            f"4️⃣ *Bollinger Bands:* %B = {ind.get('bb_percent_b', 0)}\n"
+            f"   Üst: $ {ind.get('bb_upper', 0):.2f} | Alt: $ {ind.get('bb_lower', 0):.2f}\n\n"
+            f"5️⃣ *Destek/Direnç:*\n"
+            f"   🛡️ Destek: $ {ind.get('support_level', 0):.2f}\n"
+            f"   🎯 Direnç: $ {ind.get('resistance_level', 0):.2f}\n\n"
+            f"6️⃣ *Market Yapısı:* {ind.get('market_structure', 'N/A')}\n\n"
+            f"7️⃣ *Multi-Timeframe (15m/1h/4h):* {tv.get('consensus', 'N/A')}\n\n"
+            f"8️⃣ *24s Değişim:* %{ticker.get('price_change_pct', 0):+.2f}\n"
+            f"9️⃣ *Flash Crash Uyarısı:* {crash}\n\n"
+            f"⚡ *Aktif Pozisyon:* {pos_str}\n\n"
+            f"🤖 *AI KARARI:* [{ai.get('action', 'HOLD')}] (%{ai.get('confidence', 0)} güven)\n"
+            f"💬 *Gerekçe:* {ai.get('reasoning', 'N/A')}"
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_indicators(self):
+        """Sends a compact technical indicator summary."""
+        ind = self.latest_summary
+        if not ind:
+            self.notifier.send_message("❌ Henüz indikatör verisi yok.")
+            return
+        ema_trend = "🟢 BULLISH" if ind.get('macro_trend_ema200') == "BULLISH" else "🔴 BEARISH"
+        msg = (
+            f"📐 *TEKNİK İNDİKATÖRLER*\n\n"
+            f"• RSI (14): {ind.get('rsi_14', 0)} [{ind.get('rsi_status', 'N/A')}]\n"
+            f"• RSI Sapma: {ind.get('rsi_divergence', 'NONE')}\n"
+            f"• EMA 9: $ {ind.get('ema_9', 0):.2f}\n"
+            f"• EMA 21: $ {ind.get('ema_21', 0):.2f}\n"
+            f"• EMA 200: $ {ind.get('ema_200', 0):.2f}\n"
+            f"• Makro Trend: {ema_trend}\n"
+            f"• Kısa Vade Cross: {ind.get('short_term_ema_cross', 'N/A')}\n"
+            f"• ATR (14): $ {ind.get('atr_14', 0):.2f}\n"
+            f"• Bollinger %B: {ind.get('bb_percent_b', 0)}\n"
+            f"• Destek: $ {ind.get('support_level', 0):.2f}\n"
+            f"• Direnç: $ {ind.get('resistance_level', 0):.2f}\n"
+            f"• Market Yapısı: {ind.get('market_structure', 'N/A')}\n"
+            f"• Hacim Değişimi: %{ind.get('volume_change_pct', 0):+.2f}"
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_multiframe(self):
+        """Sends multi-timeframe trend analysis."""
+        mf = self.multiframe_summary
+        tv = self.latest_tradingview
+        if not mf:
+            self.notifier.send_message("❌ Çoklu zaman dilimi verisi yok.")
+            return
+        lines = []
+        for tf in ["15m", "1h", "4h"]:
+            d = mf.get(tf, {})
+            trend = d.get('trend', 'N/A')
+            icon = "🟢" if trend == "BULLISH" else ("🔴" if trend == "BEARISH" else "⚪")
+            tv_rec = tv.get(tf, {}).get('recommendation', 'N/A') if tv else 'N/A'
+            lines.append(f"• *{tf}:* {icon} {trend} | Fiyat $ {d.get('last_close', 0):.2f} | TV: {tv_rec}")
+        msg = (
+            f"⏱️ *ÇOKLU ZAMAN DİLİMİ ANALİZİ*\n\n"
+            f"{chr(10).join(lines)}\n\n"
+            f"💡 *Yorum:* Uyumlu trend = daha yüksek güven. "
+            f"Çelişkili trendlerde AI temkinli davranır (HOLD)."
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_position(self):
+        """Sends detailed position info with liquidation price."""
+        pos = self.latest_position
+        if pos.get("side") == "FLAT":
+            self.notifier.send_message("📭 *Aktif pozisyon yok (FLAT).* Bot piyasayı taramaya devam ediyor.")
+            return
+        side_icon = "🟢" if pos["side"] == "LONG" else "🔴"
+        liq = pos.get('liquidation_price', 0)
+        msg = (
+            f"⚡ *AKTİF POZİSYON DETAYI*\n\n"
+            f"📌 *Yön:* {side_icon} {pos['side']}\n"
+            f"🪙 *Sembol:* {pos.get('symbol', config.SYMBOL)}\n"
+            f"📦 *Miktar:* {pos['amount']} BTC\n"
+            f"💲 *Giriş Fiyatı:* $ {pos['entry_price']:.2f}\n"
+            f"💰 *Gerçekleşmemiş PnL:* $ {pos['unrealized_pnl']:+.2f}\n"
+            f"⚠️ *Likidasyon Fiyatı:* $ {liq:.2f}" if liq else f"⚠️ *Likidasyon Fiyatı:* Bilinmiyor"
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_settings(self):
+        """Sends current bot configuration."""
+        msg = (
+            f"⚙️ *BOT AYARLARI*\n\n"
+            f"• Sembol: {config.SYMBOL}\n"
+            f"• Zaman Dilimi: {config.TIMEFRAME}\n"
+            f"• Kaldıraç: {config.LEVERAGE}x\n"
+            f"• İşlem Başına Risk: %{config.RISK_PER_TRADE_PCT * 100:.1f}\n"
+            f"• Güven Eşiği: %{config.CONFIDENCE_THRESHOLD}\n"
+            f"• Günlük Hedef: %{config.DAILY_TARGET_PROFIT_PCT * 100:.1f}\n"
+            f"• Maks Günlük Kayıp: %{config.MAX_DAILY_DRAWDOWN_PCT * 100:.1f}\n"
+            f"• SL Çarpanı: {config.ATR_SL_MULTIPLIER}x ATR\n"
+            f"• TP Çarpanı: {config.ATR_TP_MULTIPLIER}x ATR\n"
+            f"• Komisyon (çift yön): %{config.ROUNDTRIP_FEE_RATE * 100:.2f}\n"
+            f"• Tarama Aralığı: {config.CHECK_INTERVAL_SECONDS}s"
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_history(self):
+        """Sends recent trade history from SQLite DB."""
+        trades = trade_logger.get_recent_trades(limit=10)
+        if not trades:
+            self.notifier.send_message("📭 *Henüz işlem kaydı yok.*")
+            return
+        lines = []
+        for t in trades:
+            icon = "🟢" if t['status'] == 'WIN' else ("🔴" if t['status'] == 'LOSS' else "⏳")
+            pnl_str = "AÇIK" if t['status'] == 'OPEN' else f"$ {t['pnl_usdt']:+.2f}"
+            lines.append(
+                f"#{t['id']} | {icon} {t['side']} | $ {t['entry_price']:.2f} "
+                f"| {t['quantity']} | PnL: {pnl_str}"
+            )
+        msg = (
+            f"📚 *SON İŞLEM GEÇMİŞİ (SQLITE)*\n\n"
+            f"{chr(10).join(lines)}"
+        )
+        self.notifier.send_message(msg)
+
+    def send_telegram_risk(self):
+        """Sends current risk manager status."""
+        daily_pnl = self.latest_balance - self.daily_start_balance
+        daily_pct = (daily_pnl / self.daily_start_balance * 100) if self.daily_start_balance > 0 else 0
+        target = config.DAILY_TARGET_PROFIT_PCT * 100
+        max_dd = config.MAX_DAILY_DRAWDOWN_PCT * 100
+        status = "✅ TRADING AKTİF"
+        if daily_pct >= target:
+            status = "🎯 GÜNLÜK HEDEFE ULAŞILDI"
+        elif daily_pct <= -max_dd:
+            status = "🛑 CIRCUIT BREAKER AKTİF"
+        msg = (
+            f"🛡️ *RİSK YÖNETİMİ DURUMU*\n\n"
+            f"• Durum: {status}\n"
+            f"• Günlük PnL: $ {daily_pnl:+.2f} (%{daily_pct:+.2f})\n"
+            f"• Günlük Hedef: %{target:.1f}\n"
+            f"• Maks Kayıp Sınırı: %{max_dd:.1f}\n"
+            f"• İşlem Başına Risk: %{config.RISK_PER_TRADE_PCT * 100:.1f}\n\n"
+            f"💡 *Not:* Komisyonlar net PnL'den düşülür (%{config.ROUNDTRIP_FEE_RATE * 100:.2f} çift yön)."
+        )
+        self.notifier.send_message(msg)
+
     def manual_close_position(self):
         if not self.dry_run:
             success = self.executor.close_position(config.SYMBOL)
