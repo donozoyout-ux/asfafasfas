@@ -183,10 +183,28 @@ def compute_sentiment(headlines: list[dict]) -> dict:
     }
 
 
+def _fetch_fear_greed_index() -> int:
+    """Fetches the Fear & Greed Index (0..100). -1 on failure."""
+    try:
+        resp = requests.get(
+            "https://api.alternative.me/fng/?limit=1&format=json",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            if data:
+                return int(data[0].get("value", 50))
+    except Exception:
+        pass
+    return -1
+
+
 def get_crypto_news(max_items: int = 15) -> dict:
     """
     Top-level news fetch with cache + failure backoff.
-    Returns dict with sentiment, top headlines, and source count.
+    Uses Fear & Greed Index (reliable) as primary sentiment, Google News headlines
+    as secondary. Returns dict with sentiment, top headlines, and source count.
     """
     key = "crypto_news"
     now = time.time()
@@ -206,11 +224,48 @@ def get_crypto_news(max_items: int = 15) -> dict:
         if cached is not None:
             return cached
 
-    headlines = _fetch_google_news("BTC", max_items=12) + _fetch_cryptocompare_news(max_items=10)
+    fng = _fetch_fear_greed_index()
+    headlines = _fetch_google_news("BTC", max_items=12)
+    if fng >= 0 and headlines:
+        # Combine: Fear&Greed primary (value 0..100 -> -1..+1), headlines secondary
+        fng_score = (fng - 50) / 50.0
+        headline_sent = compute_sentiment(headlines)
+        score = round(0.6 * fng_score + 0.4 * headline_sent["sentiment_score"], 3)
+        label = "BULLISH" if score >= 0.25 else ("BEARISH" if score <= -0.25 else "NEUTRAL")
+        result = {
+            "sentiment_score": score,
+            "sentiment_label": label,
+            "fear_greed_index": fng,
+            "fear_greed_label": "Fear" if fng < 40 else ("Greed" if fng > 60 else "Neutral"),
+            "top_headlines": [h["title"] for h in headlines[:5]],
+            "headline_details": headlines[:8],
+            "sources": len({h["source"] for h in headlines}) + 1,
+            "cached": False,
+        }
+        _cache[key] = result
+        _last_fetch[key] = now
+        return result
+
+    if fng >= 0:
+        # Headlines failed but Fear&Greed worked - still usable
+        fng_score = (fng - 50) / 50.0
+        label = "BULLISH" if fng_score >= 0.25 else ("BEARISH" if fng_score <= -0.25 else "NEUTRAL")
+        result = {
+            "sentiment_score": round(fng_score, 3),
+            "sentiment_label": label,
+            "fear_greed_index": fng,
+            "fear_greed_label": "Fear" if fng < 40 else ("Greed" if fng > 60 else "Neutral"),
+            "top_headlines": [],
+            "headline_details": [],
+            "sources": 1,
+            "cached": False,
+        }
+        _cache[key] = result
+        _last_fetch[key] = now
+        return result
 
     if not headlines:
         _backoff_until[key] = now + _BACKOFF_SECONDS
-        # Return stale cache if available
         if key in _cache:
             return _cache[key]
         return {

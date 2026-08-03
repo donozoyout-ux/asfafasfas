@@ -505,6 +505,13 @@ class BotController:
         if self.latest_position.get("side") != "FLAT":
             return {"success": False, "message": f"Zaten açık pozisyon var: {self.latest_position['side']}"}
 
+        import risk_manager as risk_module
+        adaptive = risk_module.adaptive_parameters(atr_14=atr_14, entry_price=current_price, base_leverage=config.LEVERAGE)
+        try:
+            self.executor.set_leverage(config.SYMBOL, int(adaptive["leverage"]))
+        except Exception:
+            pass
+
         order = self.executor.place_market_order(config.SYMBOL, order_side, qty)
         if not order:
             self.record_order_error("manual_trade_failed", f"{side} {qty} @ {current_price}")
@@ -669,7 +676,9 @@ class BotController:
                 "sentiment_score": self.latest_news.get("sentiment_score", 0.0),
                 "sentiment_label": self.latest_news.get("sentiment_label", "NEUTRAL"),
                 "top_headlines": self.latest_news.get("top_headlines", []),
-                "sources": self.latest_news.get("sources", 0)
+                "sources": self.latest_news.get("sources", 0),
+                "fear_greed_index": self.latest_news.get("fear_greed_index"),
+                "fear_greed_label": self.latest_news.get("fear_greed_label", "")
             },
             "derivatives": {
                 "funding_rate_pct": self.latest_derivatives.get("funding_rate_pct", 0.0),
@@ -677,7 +686,24 @@ class BotController:
             },
             "order_error_stats": self.order_error_stats,
             "settings": settings.get_all(),
+            "adaptive": self.get_adaptive_state(),
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    def get_adaptive_state(self) -> dict:
+        """Current auto-selected leverage/multipliers based on volatility."""
+        import risk_manager as risk_module
+        price = self.latest_summary.get('current_price', 0)
+        atr = self.latest_summary.get('atr_14', 0)
+        if not price or not atr:
+            return {"leverage": config.LEVERAGE, "sl_multiplier": config.ATR_SL_MULTIPLIER,
+                    "tp_multiplier": config.ATR_TP_MULTIPLIER, "atr_pct": 0}
+        ad = risk_module.adaptive_parameters(atr, price, base_leverage=config.LEVERAGE)
+        return {
+            "leverage": ad["leverage"],
+            "sl_multiplier": ad["sl_multiplier"],
+            "tp_multiplier": ad["tp_multiplier"],
+            "atr_pct": ad["atr_pct"]
         }
 
     def start(self):
@@ -786,10 +812,14 @@ class BotController:
                 self.ticker_24h = market_data.fetch_24h_ticker(config.SYMBOL)
                 self.multiframe_summary = market_data.fetch_multiframe_data(config.SYMBOL)
                 self.latest_tradingview = tradingview_service.fetch_tradingview_analysis(config.SYMBOL)
+                self.latest_news = news_service.get_crypto_news()
+                self.latest_derivatives = market_data.fetch_derivatives_metrics(config.SYMBOL)
                 
                 print(f"📊 {config.SYMBOL} Mark Price: ${self.latest_summary['current_price']:.2f}")
                 print(f"📈 RSI(14): {self.latest_summary['rsi_14']} [{self.latest_summary['rsi_status']}]")
                 print(f"📡 TradingView TA Consensus: {self.latest_tradingview.get('consensus', 'N/A')}")
+                print(f"📰 Sentiment: {self.latest_news.get('sentiment_label')} ({self.latest_news.get('sentiment_score')}) | "
+                      f"Funding: {self.latest_derivatives.get('funding_rate_pct')}% | OI: {self.latest_derivatives.get('open_interest')}")
                 
                 # 2. Check Active Position & Balance
                 if not self.dry_run:
@@ -862,20 +892,14 @@ class BotController:
 
                     # 3. Request Groq AI Decision with TradingView + News + Derivatives Context
                     print("🧠 Consulting Groq Llama-3.3 AI Brain...")
-                    news_data = news_service.get_crypto_news()
-                    deriv_data = market_data.fetch_derivatives_metrics(config.SYMBOL)
-                    self.latest_news = news_data
-                    self.latest_derivatives = deriv_data
-                    print(f"📰 News Sentiment: {news_data.get('sentiment_label')} ({news_data.get('sentiment_score')}) | "
-                          f"Funding: {deriv_data.get('funding_rate_pct')}% | OI: {deriv_data.get('open_interest')} BTC")
                     ai_decision = ai_brain.analyze_market_with_ai(
                         self.latest_summary,
                         self.ticker_24h,
                         multiframe_data=self.multiframe_summary,
                         tradingview_data=self.latest_tradingview,
                         current_position=self.latest_position["side"],
-                        news_data=news_data,
-                        derivatives_data=deriv_data
+                        news_data=self.latest_news,
+                        derivatives_data=self.latest_derivatives
                     )
                     self.latest_ai_decision = ai_decision
                     
@@ -900,14 +924,27 @@ class BotController:
                     
                     # 4. Execute Trade if High Conviction (adaptive threshold)
                     if action in ["LONG", "SHORT"] and confidence >= current_threshold:
+                        # Auto-tune leverage + multipliers based on volatility
+                        import risk_manager as risk_module
+                        adaptive = risk_module.adaptive_parameters(
+                            atr_14=self.latest_summary['atr_14'],
+                            entry_price=self.latest_summary['current_price'],
+                            base_leverage=config.LEVERAGE
+                        )
+                        adaptive_sl = adaptive["sl_multiplier"]
+                        adaptive_tp = adaptive["tp_multiplier"]
+                        adaptive_lev = adaptive["leverage"]
+                        print(f"⚙️ Adaptive: kaldıraç {adaptive_lev}x | SL {adaptive_sl}x ATR | TP {adaptive_tp}x ATR | ATR% {adaptive['atr_pct']}")
+
                         trade_params = risk_mgr.calculate_position_parameters(
                             account_balance=self.latest_balance,
                             entry_price=self.latest_summary['current_price'],
                             atr_14=self.latest_summary['atr_14'],
                             side=action,
-                            sl_mult=sl_mult,
-                            tp_mult=tp_mult,
-                            risk_pct=adaptation.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) / 100
+                            sl_mult=adaptive_sl,
+                            tp_mult=adaptive_tp,
+                            risk_pct=adaptation.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) / 100,
+                            leverage=adaptive_lev
                         )
                         
                         print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")
@@ -935,6 +972,10 @@ class BotController:
                             )
                         else:
                             order_side = "BUY" if action == "LONG" else "SELL"
+                            try:
+                                self.executor.set_leverage(config.SYMBOL, int(trade_params.get("leverage", config.LEVERAGE)))
+                            except Exception as e:
+                                print(f"[WARN] Leverage apply failed: {e}")
                             market_order = self.executor.place_market_order(config.SYMBOL, order_side, trade_params['quantity'])
                             
                             if market_order:

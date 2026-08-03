@@ -43,15 +43,19 @@ class RiskManager:
         side: str,
         sl_mult: float = config.ATR_SL_MULTIPLIER,
         tp_mult: float = config.ATR_TP_MULTIPLIER,
-        risk_pct: float = None
+        risk_pct: float = None,
+        leverage: float = None
     ) -> dict:
         """
         Calculates exact Stop-Loss, Take-Profit, and position size (quantity in BTC)
         matching account risk tolerance and accounting for Binance Futures trading fees.
         risk_pct can be overridden by the learning engine (adaptive risk).
+        leverage can be overridden by the adaptive strategy (defaults to config.LEVERAGE).
         """
         if risk_pct is None:
             risk_pct = config.RISK_PER_TRADE_PCT
+        if leverage is None:
+            leverage = config.LEVERAGE
         # Ensure Take Profit covers roundtrip trading fees (0.10%) + ATR target
         fee_offset = entry_price * ROUNDTRIP_FEE_RATE
         
@@ -77,7 +81,7 @@ class RiskManager:
         # room for maintenance margin + fees (full-leverage usage gets rejected
         # with "Margin is insufficient"). Max 60% of balance used as margin.
         margin_utilization = 0.60
-        max_notional = account_balance * config.LEVERAGE * margin_utilization
+        max_notional = account_balance * leverage * margin_utilization
         position_notional = min(notional_val, max_notional)
         
         # Quantity in contracts (e.g. BTC)
@@ -98,5 +102,40 @@ class RiskManager:
             "risk_usdt": round(risk_usdt, 2),
             "notional_value": round(actual_notional, 2),
             "est_roundtrip_fee_usdt": round(est_roundtrip_fee_usdt, 3),
-            "risk_reward_ratio": round(tp_mult / sl_mult, 2)
+            "risk_reward_ratio": round(tp_mult / sl_mult, 2),
+            "leverage": leverage
         }
+
+
+def adaptive_parameters(atr_14: float, entry_price: float, base_leverage: float = None) -> dict:
+    """
+    Bot auto-selects leverage + ATR multipliers based on current volatility.
+    High volatility -> lower leverage + wider stops (avoid liquidation whipsaws).
+    Low volatility -> higher leverage + tighter stops.
+    """
+    base_leverage = base_leverage if base_leverage else config.LEVERAGE
+    atr_pct = (atr_14 / entry_price * 100) if entry_price > 0 else 1.0
+
+    if atr_pct >= 1.0:      # Extreme volatility
+        leverage = min(base_leverage, 2)
+        sl_mult = 1.8
+        tp_mult = 3.0
+    elif atr_pct >= 0.6:    # High volatility
+        leverage = min(base_leverage, 3)
+        sl_mult = 1.6
+        tp_mult = 2.8
+    elif atr_pct >= 0.35:   # Medium volatility
+        leverage = min(base_leverage, 5)
+        sl_mult = 1.5
+        tp_mult = 2.5
+    else:                   # Low volatility
+        leverage = base_leverage
+        sl_mult = 1.2
+        tp_mult = 2.0
+
+    return {
+        "leverage": max(1, int(leverage)),
+        "sl_multiplier": sl_mult,
+        "tp_multiplier": tp_mult,
+        "atr_pct": round(atr_pct, 3)
+    }

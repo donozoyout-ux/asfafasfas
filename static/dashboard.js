@@ -164,7 +164,12 @@ async function fetchStatus() {
             newsEl.className = 'card-value ' + (label === 'BULLISH' ? 'up' : label === 'BEARISH' ? 'down' : 'flat');
         }
         const newsSrc = document.getElementById('news-sources');
-        if (newsSrc) newsSrc.textContent = (news.sources || 0) + ' kaynak';
+        if (newsSrc) {
+            const fng = news.fear_greed_index;
+            newsSrc.textContent = fng !== undefined && fng !== null
+                ? 'F&G ' + fng + ' (' + (news.fear_greed_label || '') + ') · ' + (news.sources || 0) + ' kaynak'
+                : (news.sources || 0) + ' kaynak';
+        }
         const headlines = document.getElementById('news-headlines');
         if (headlines) {
             const tops = (news.top_headlines || []).slice(0, 3);
@@ -178,6 +183,12 @@ async function fetchStatus() {
         }
         const oiEl = document.getElementById('open-interest');
         if (oiEl) oiEl.textContent = num(deriv.open_interest, 0) ? num(deriv.open_interest, 0).toLocaleString('en-US') + ' BTC' : '—';
+
+        const ad = d.adaptive || {};
+        const adaptEl = document.getElementById('adaptive-info');
+        if (adaptEl && ad.leverage) {
+            adaptEl.textContent = 'Otomatik: ' + ad.leverage + 'x kaldıraç · SL ' + ad.sl_multiplier + 'x ATR · TP ' + ad.tp_multiplier + 'x ATR (ATR% ' + num(ad.atr_pct, 2) + ')';
+        }
 
         const st = d.settings || {};
         if (st && Object.keys(st).length) {

@@ -55,11 +55,14 @@ def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe
     tv_str = json.dumps(tradingview_data) if tradingview_data else "TradingView: N/A"
 
     if news_data:
+        fng = news_data.get("fear_greed_index")
+        fng_str = f" (F&G Index: {fng}/{news_data.get('fear_greed_label', '')})" if fng is not None else ""
         news_str = (
             f"- Sentiment Score: {news_data.get('sentiment_score', 0.0)} "
-            f"({news_data.get('sentiment_label', 'NEUTRAL')})\n"
+            f"({news_data.get('sentiment_label', 'NEUTRAL')}){fng_str}\n"
             f"- Top Headlines: {json.dumps(news_data.get('top_headlines', []))}\n"
             f"- Rule: score <= -0.5 (BEARISH) vetoes LONG. "
+            f"F&G <= 25 = EXTREME FEAR (oversold zone - be cautious of catching knife, but no chase). "
             f"Do NOT buy into fear-driven dumps or chase speculative pumps."
         )
     else:
