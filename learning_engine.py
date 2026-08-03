@@ -10,7 +10,8 @@ import json
 import os
 import trade_logger
 
-LEARNING_STATE_PATH = os.path.join(os.path.dirname(__file__), "learning_state.json")
+_DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+LEARNING_STATE_PATH = os.path.join(_DATA_DIR, "learning_state.json")
 
 
 def _load_state() -> dict:

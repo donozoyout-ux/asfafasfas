@@ -1,20 +1,38 @@
-from tradingview_ta import TA_Handler, Interval, Exchange
+import time
+import threading
+from tradingview_ta import TA_Handler, Interval
 import config
+
+_CACHE = {}
+_CACHE_TTL = 300  # 5 minutes between TradingView refreshes (avoid 429 rate limits)
+_LOCK = threading.Lock()
+
+# 1h is the primary macro timeframe. 15m/4h are refreshed less frequently.
+_TIME_FRAMES = {
+    "1h": Interval.INTERVAL_1_HOUR,
+    "15m": Interval.INTERVAL_15_MINUTES,
+    "4h": Interval.INTERVAL_4_HOURS,
+}
+
 
 def fetch_tradingview_analysis(symbol: str = "BTCUSDT", exchange: str = "BINANCE") -> dict:
     """
-    Fetches official TradingView Technical Analysis summary, Oscillators rating,
-    and Moving Averages rating across 15m, 1h, and 4h intervals.
+    Fetches official TradingView Technical Analysis summary with rate-limit protection.
+    - Results are cached per timeframe for _CACHE_TTL seconds.
+    - On failure, the last known result is returned instead of empty NEUTRAL.
+    This avoids the HTTP 429 errors from TradingView's shared API.
     """
-    timeframes = {
-        "15m": Interval.INTERVAL_15_MINUTES,
-        "1h": Interval.INTERVAL_1_HOUR,
-        "4h": Interval.INTERVAL_4_HOURS,
-    }
-    
     results = {}
-    
-    for tf_label, interval in timeframes.items():
+    now = time.time()
+
+    for tf_label, interval in _TIME_FRAMES.items():
+        key = f"{symbol}:{tf_label}"
+        with _LOCK:
+            cached = _CACHE.get(key)
+            if cached and (now - cached["ts"]) < _CACHE_TTL:
+                results[tf_label] = cached["data"]
+                continue
+
         try:
             handler = TA_Handler(
                 symbol=symbol,
@@ -24,8 +42,8 @@ def fetch_tradingview_analysis(symbol: str = "BTCUSDT", exchange: str = "BINANCE
             )
             analysis = handler.get_analysis()
             summary = analysis.summary
-            
-            results[tf_label] = {
+
+            data = {
                 "recommendation": summary.get("RECOMMENDATION", "NEUTRAL"),
                 "buy_count": summary.get("BUY", 0),
                 "sell_count": summary.get("SELL", 0),
@@ -33,21 +51,30 @@ def fetch_tradingview_analysis(symbol: str = "BTCUSDT", exchange: str = "BINANCE
                 "oscillators": analysis.oscillators.get("RECOMMENDATION", "NEUTRAL"),
                 "moving_averages": analysis.moving_averages.get("RECOMMENDATION", "NEUTRAL")
             }
+            with _LOCK:
+                _CACHE[key] = {"ts": now, "data": data}
+            results[tf_label] = data
         except Exception as e:
             print(f"[EXCEPT] TradingView TA Error ({tf_label}): {e}")
-            results[tf_label] = {
-                "recommendation": "NEUTRAL",
-                "buy_count": 0,
-                "sell_count": 0,
-                "neutral_count": 0,
-                "oscillators": "NEUTRAL",
-                "moving_averages": "NEUTRAL"
-            }
-            
+            # Fall back to last known result, otherwise mark as UNKNOWN
+            with _LOCK:
+                stale = _CACHE.get(key)
+            if stale:
+                results[tf_label] = stale["data"]
+            else:
+                results[tf_label] = {
+                    "recommendation": "UNKNOWN",
+                    "buy_count": 0,
+                    "sell_count": 0,
+                    "neutral_count": 0,
+                    "oscillators": "UNKNOWN",
+                    "moving_averages": "UNKNOWN"
+                }
+
     # Calculate overall consensus
-    rec_15m = results.get("15m", {}).get("recommendation", "NEUTRAL")
     rec_1h = results.get("1h", {}).get("recommendation", "NEUTRAL")
+    rec_15m = results.get("15m", {}).get("recommendation", "NEUTRAL")
     rec_4h = results.get("4h", {}).get("recommendation", "NEUTRAL")
-    
+
     results["consensus"] = f"15m: {rec_15m} | 1h: {rec_1h} | 4h: {rec_4h}"
     return results

@@ -659,10 +659,13 @@ class BotController:
                     print("[INFO] Position closed! Fetching realized PnL with fees...")
                     if self.active_trade_id:
                         # Fetch real realized PnL including commissions from Binance
+                        # Only look at income AFTER this trade's entry time so we
+                        # don't accumulate PnL from older trades.
                         realized = {"net_pnl": 0.0, "realized_pnl": 0.0, "commission": 0.0}
                         try:
                             if not self.dry_run:
-                                realized = self.executor.get_realized_pnl(config.SYMBOL)
+                                start_ms = trade_logger.get_trade_timestamp(self.active_trade_id)
+                                realized = self.executor.get_realized_pnl(config.SYMBOL, start_ms=start_ms)
                         except Exception as e:
                             print(f"[WARN] Could not fetch realized PnL: {e}")
                         trade_logger.update_trade_exit(

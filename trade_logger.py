@@ -3,7 +3,16 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "trades.db")
+# Data directory: overridable via DATA_DIR env var (Render Persistent Disk).
+# Falls back to the script directory for local dev.
+_DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+if not os.path.isdir(_DATA_DIR):
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+    except Exception:
+        _DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DB_PATH = os.path.join(_DATA_DIR, "trades.db")
 
 def init_db():
     """Initializes SQLite database for persistent trade logging and self-learning."""
@@ -229,6 +238,22 @@ def get_stale_open_trades() -> list:
         "multiframe_trend", "rsi_status", "rsi_divergence", "crash_alert", "hold_time_min"
     ]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def get_trade_timestamp(trade_id: int):
+    """Returns the opening timestamp (as epoch ms) of a given trade, or None."""
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return None
+    try:
+        return int(datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
+    except Exception:
+        return None
 
 
 def get_closed_trades(limit: int = 50) -> list:
