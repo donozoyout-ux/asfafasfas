@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the trading bot
-CMD ["python", "main.py"]
+CMD ["python", "app.py"]
