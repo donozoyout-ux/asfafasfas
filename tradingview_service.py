@@ -4,7 +4,8 @@ from tradingview_ta import TA_Handler, Interval
 import config
 
 _CACHE = {}
-_CACHE_TTL = 300  # 5 minutes between TradingView refreshes (avoid 429 rate limits)
+_CACHE_TTL = 300  # 5 minutes between successful TradingView refreshes
+_FAIL_TTL = 600    # 10 minutes before retrying a failed timeframe (429 backoff)
 _LOCK = threading.Lock()
 
 # 1h is the primary macro timeframe. 15m/4h are refreshed less frequently.
@@ -32,6 +33,16 @@ def fetch_tradingview_analysis(symbol: str = "BTCUSDT", exchange: str = "BINANCE
             if cached and (now - cached["ts"]) < _CACHE_TTL:
                 results[tf_label] = cached["data"]
                 continue
+            # If a previous attempt failed recently, back off and reuse last result
+            failed = _CACHE.get(key + ":fail")
+            if failed and (now - failed) < _FAIL_TTL:
+                stale = _CACHE.get(key)
+                results[tf_label] = stale["data"] if stale else {
+                    "recommendation": "UNKNOWN",
+                    "buy_count": 0, "sell_count": 0, "neutral_count": 0,
+                    "oscillators": "UNKNOWN", "moving_averages": "UNKNOWN"
+                }
+                continue
 
         try:
             handler = TA_Handler(
@@ -53,12 +64,14 @@ def fetch_tradingview_analysis(symbol: str = "BTCUSDT", exchange: str = "BINANCE
             }
             with _LOCK:
                 _CACHE[key] = {"ts": now, "data": data}
+                _CACHE.pop(key + ":fail", None)
             results[tf_label] = data
         except Exception as e:
             print(f"[EXCEPT] TradingView TA Error ({tf_label}): {e}")
-            # Fall back to last known result, otherwise mark as UNKNOWN
+            # Fall back to last known result and back off retries for a while
             with _LOCK:
                 stale = _CACHE.get(key)
+                _CACHE[key + ":fail"] = now
             if stale:
                 results[tf_label] = stale["data"]
             else:
