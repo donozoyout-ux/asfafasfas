@@ -26,7 +26,7 @@ You have continuous memory of your recent trade outcomes. Analyze past trade per
 CRITICAL INSTRUCTIONS:
 - Return ONLY a valid, raw JSON object (NO markdown, NO code block ticks ```json, NO extra text).
 - Action MUST be "LONG", "SHORT", or "HOLD".
-- Require high conviction (confidence >= 70%) to recommend LONG or SHORT. Otherwise output HOLD.
+- Require high conviction (confidence >= 60%) to recommend LONG or SHORT. Otherwise output HOLD.
 - If recommending LONG or SHORT, provide dynamic ATR multipliers for Stop-Loss (e.g. 1.2 to 2.0) and Take-Profit (e.g. 2.0 to 3.5) ensuring Risk-Reward Ratio >= 1:1.5.
 
 JSON Output Schema:

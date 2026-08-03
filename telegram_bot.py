@@ -1,6 +1,7 @@
 import time
 import threading
 import requests
+from datetime import datetime
 import config
 import trade_logger
 
@@ -78,6 +79,39 @@ class TelegramNotifier:
             f"💡 *Yapay Zeka Hafızası:* Tamamlanan tüm işlemler kaydedilmekte ve sonraki analizlerde Groq promptuna beslenmektedir."
         )
         self.send_message(msg)
+
+    def send_daily_report(self, bot_controller, trade_logger):
+        """Sends a comprehensive daily profit report at 12:00."""
+        try:
+            balance = bot_controller.latest_balance
+            daily_pnl = balance - bot_controller.daily_start_balance
+            daily_pnl_pct = (daily_pnl / bot_controller.daily_start_balance * 100) if bot_controller.daily_start_balance > 0 else 0
+            summary = trade_logger.get_performance_summary()
+            pos = bot_controller.latest_position
+            pos_str = "YOK (FLAT)"
+            if pos.get("side") != "FLAT":
+                pos_str = f"{pos['side']} {pos['amount']} BTC @ ${pos['entry_price']:.2f}"
+
+            msg = (
+                f"📊 *GÜNLÜK KÂR RAPORU ({datetime.now().strftime('%d.%m.%Y')})*\n\n"
+                f"💰 *Kasa Bakiyesi:* ${balance:.2f} USDT\n"
+                f"📈 *Günlük Kâr:* ${daily_pnl:+.2f} USDT (%{daily_pnl_pct:+.2f})\n"
+                f"🎯 *Günlük Hedef:* %{config.DAILY_TARGET_PROFIT_PCT * 100:.1f}\n"
+                f"🛡️ *Maks Kayıp Sınırı:* %{config.MAX_DAILY_DRAWDOWN_PCT * 100:.1f}\n"
+                f"⚡ *Aktif Pozisyon:* {pos_str}\n\n"
+                f"📚 *Geçmiş İşlemler:*\n"
+                f"• Toplam: {summary['total_trades']}\n"
+                f"• Kazanç: 🟢 {summary['wins']} | Kayıp: 🔴 {summary['losses']}\n"
+                f"• Win Rate: %{summary['win_rate_pct']}\n"
+                f"• Toplam Geçmiş PnL: ${summary['total_pnl_usdt']:+.2f}\n\n"
+                f"🧠 *AI Kararı:* [{bot_controller.latest_ai_decision.get('action', 'HOLD')}] "
+                f"(%{bot_controller.latest_ai_decision.get('confidence', 0)} güven)"
+            )
+            self.send_message(msg)
+            return True
+        except Exception as e:
+            print(f"[EXCEPT] Daily report error: {e}")
+            return False
 
     def listen_for_commands(self, bot_controller):
         """

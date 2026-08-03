@@ -1,8 +1,8 @@
 import config
 
 # Binance Futures Fee Rates (Standard Taker Fee = 0.05%)
-BINANCE_FUTURES_TAKER_FEE = 0.0005  # 0.05% per order
-ROUNDTRIP_FEE_RATE = BINANCE_FUTURES_TAKER_FEE * 2  # 0.10% total fee for opening + closing
+BINANCE_FUTURES_TAKER_FEE = config.BINANCE_FUTURES_TAKER_FEE
+ROUNDTRIP_FEE_RATE = config.ROUNDTRIP_FEE_RATE
 
 class RiskManager:
     def __init__(self, initial_balance: float = 5000.0):

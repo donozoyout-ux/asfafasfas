@@ -62,6 +62,42 @@ class BinanceFuturesExecutor:
             print(f"[EXCEPT] Get balance exception: {e}")
         return 0.0
 
+    def get_realized_pnl(self, symbol: str = config.SYMBOL, start_ms: int = None, end_ms: int = None) -> dict:
+        """
+        Fetches realized PnL and commissions from Binance Futures income API.
+        Returns dict with total_realized_pnl and total_commission.
+        """
+        endpoint = "/fapi/v1/income"
+        params = {"symbol": symbol}
+        if start_ms:
+            params["startTime"] = start_ms
+        if end_ms:
+            params["endTime"] = end_ms
+        query = self._sign_request(params)
+        url = f"{self.base_url}{endpoint}?{query}"
+
+        realized_pnl = 0.0
+        commission = 0.0
+        try:
+            res = requests.get(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                for record in res.json():
+                    income_type = record.get("incomeType", "")
+                    amount = float(record.get("income", 0))
+                    if income_type == "REALIZED_PNL":
+                        realized_pnl += amount
+                    elif income_type == "COMMISSION":
+                        commission += amount
+            else:
+                print(f"[WARN] Get income error {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[EXCEPT] Get income exception: {e}")
+        return {
+            "realized_pnl": round(realized_pnl, 2),
+            "commission": round(commission, 2),
+            "net_pnl": round(realized_pnl + commission, 2)
+        }
+
     def get_open_position(self, symbol: str = config.SYMBOL) -> dict:
         """
         Fetches current open position risk for the specified symbol.

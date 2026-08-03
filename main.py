@@ -336,6 +336,25 @@ class BotController:
         
         self.notifier.listen_for_commands(self)
         
+        def daily_report_scheduler():
+            """Sends a daily profit report to Telegram every day at 12:00."""
+            last_sent_date = None
+            while True:
+                try:
+                    now = datetime.now()
+                    if now.hour == 12 and now.minute == 0 and last_sent_date != now.date():
+                        last_sent_date = now.date()
+                        self.notifier.send_daily_report(self, trade_logger)
+                        self.daily_start_balance = self.latest_balance
+                        print("[DAILY REPORT] Günlük kâr raporu gönderildi (12:00)")
+                    time.sleep(30)
+                except Exception as e:
+                    print(f"[EXCEPT] Daily report scheduler: {e}")
+                    time.sleep(60)
+
+        scheduler_thread = threading.Thread(target=daily_report_scheduler, daemon=True)
+        scheduler_thread.start()
+        
         if not self.dry_run:
             self.executor.set_leverage(config.SYMBOL, config.LEVERAGE)
             self.latest_balance = self.executor.get_account_balance("USDT")
@@ -393,15 +412,28 @@ class BotController:
                     self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
 
                 if previous_position_side != "FLAT" and self.latest_position["side"] == "FLAT":
-                    print("[INFO] Position closed! Updating trade performance logger...")
+                    print("[INFO] Position closed! Fetching realized PnL with fees...")
                     if self.active_trade_id:
+                        # Fetch real realized PnL including commissions from Binance
+                        realized = {"net_pnl": 0.0, "realized_pnl": 0.0, "commission": 0.0}
+                        try:
+                            if not self.dry_run:
+                                realized = self.executor.get_realized_pnl(config.SYMBOL)
+                        except Exception as e:
+                            print(f"[WARN] Could not fetch realized PnL: {e}")
                         trade_logger.update_trade_exit(
                             trade_id=self.active_trade_id,
                             exit_price=self.latest_summary['current_price'],
-                            pnl_usdt=self.latest_position.get('unrealized_pnl', 0.0),
+                            pnl_usdt=realized["net_pnl"],
                             pnl_pct=0.0
                         )
                         self.active_trade_id = None
+                        self.notifier.send_message(
+                            f"✅ *İŞLEM KAPANDI!*\n\n"
+                            f"💵 *Net Kâr (Komisyon Dahil):* ${realized['net_pnl']:+.2f} USDT\n"
+                            f"💰 *Brüt Kâr:* ${realized['realized_pnl']:+.2f}\n"
+                            f"🧾 *Komisyon:* ${realized['commission']:.2f}"
+                        )
 
                 previous_position_side = self.latest_position["side"]
 
@@ -440,7 +472,7 @@ class BotController:
                     print(f"💬 AI Reasoning: {reasoning}")
                     
                     # 4. Execute Trade if High Conviction
-                    if action in ["LONG", "SHORT"] and confidence >= 70:
+                    if action in ["LONG", "SHORT"] and confidence >= config.CONFIDENCE_THRESHOLD:
                         trade_params = risk_mgr.calculate_position_parameters(
                             account_balance=self.latest_balance,
                             entry_price=self.latest_summary['current_price'],
