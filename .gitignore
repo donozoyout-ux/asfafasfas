@@ -5,4 +5,7 @@ __pycache__/
 .vscode/
 test_*.py
 trades.db
+bot.log
+bot_err.log
+learning_state.json
 .aider*
