@@ -20,6 +20,11 @@ You evaluate market data based on 4 Core Quantitative Pillars:
    - RSI Divergence (Bullish/Bearish) acts as strong reversal confirmation.
 4. Sudden Crash & Flash Dip Protection:
    - If Crash Alert is ACTIVE, prioritize capital preservation (HOLD or quick defensive exit).
+5. News Sentiment & Derivatives Speculation Guard:
+   - NEVER chase pumps or dump into panic driven by news manipulation or forced liquidations.
+   - If NEWS SENTIMENT is strongly BEARISH (score <= -0.5), VETO LONG entries (capital preservation).
+   - If funding rate is EXTREME positive (> 0.05%) the crowd is over-leveraged LONG -> favor SHORT/avoid LONG. If EXTREME negative (< -0.05%) crowd is over-leveraged SHORT -> favor LONG/avoid SHORT.
+   - Rapid Open Interest spike (+5%+ 24h) with weak price action = liquidation risk; stay cautious, prefer HOLD.
 
 IN-CONTEXT SELF-LEARNING DIRECTIVE:
 You have continuous memory of your recent trade outcomes. Analyze past trade performance (wins and losses). Adapt your thresholds dynamically to avoid repeating past mistakes.
@@ -40,7 +45,7 @@ JSON Output Schema:
 }
 """
 
-def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe_data: dict = None, tradingview_data: dict = None, current_position: str = "FLAT") -> dict:
+def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe_data: dict = None, tradingview_data: dict = None, current_position: str = "FLAT", news_data: dict = None, derivatives_data: dict = None) -> dict:
     """
     Sends technical data + TradingView TA ratings + support/resistance + market structure + past trade performance memory
     to Groq Llama-3.3-70b and receives self-adapting trading signal JSON.
@@ -48,6 +53,30 @@ def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe
     learning_memory = learning_engine.build_learning_context(limit=6)
     mf_str = json.dumps(multiframe_data) if multiframe_data else "15m: ACTIVE, 1h: BULLISH, 4h: BULLISH"
     tv_str = json.dumps(tradingview_data) if tradingview_data else "TradingView: N/A"
+
+    if news_data:
+        news_str = (
+            f"- Sentiment Score: {news_data.get('sentiment_score', 0.0)} "
+            f"({news_data.get('sentiment_label', 'NEUTRAL')})\n"
+            f"- Top Headlines: {json.dumps(news_data.get('top_headlines', []))}\n"
+            f"- Rule: score <= -0.5 (BEARISH) vetoes LONG. "
+            f"Do NOT buy into fear-driven dumps or chase speculative pumps."
+        )
+    else:
+        news_str = "- News data unavailable. Proceed on technicals only."
+
+    if derivatives_data:
+        funding_pct = derivatives_data.get("funding_rate_pct", 0.0)
+        oi = derivatives_data.get("open_interest", 0.0)
+        deriv_str = (
+            f"- Funding Rate: {derivatives_data.get('funding_rate', 0.0)} "
+            f"({funding_pct}%)\n"
+            f"- Open Interest: {oi} BTC\n"
+            f"- Rule: |funding| >= 0.05% = extreme leverage crowd -> fade direction. "
+            f"OI spike + weak price = liquidation risk -> prefer HOLD."
+        )
+    else:
+        deriv_str = "- Derivatives data unavailable."
     
     # Dynamic confidence threshold from learning engine adaptation
     try:
@@ -100,6 +129,12 @@ ANALYZE MARKET STATE FOR {config.SYMBOL}:
    - ATR (14): ${indicator_summary['atr_14']}
    - Bollinger Bands: Upper ${indicator_summary['bb_upper']} | Lower ${indicator_summary['bb_lower']}
    - BB Percent %B: {indicator_summary['bb_percent_b']}
+
+[NEWS SENTIMENT]
+{news_str}
+
+[DERIVATIVES / SPECULATION METRICS]
+{deriv_str}
 
 [SELF-LEARNING MEMORY FEEDBACK]
 {learning_memory}

@@ -21,6 +21,7 @@ import ai_brain
 import trade_logger
 import tradingview_service
 import learning_engine
+import news_service
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -178,6 +179,9 @@ class BotController:
         self.latest_balance = 5000.0
         self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
         self.latest_ai_decision = {"action": "HOLD", "confidence": 0, "reasoning": "Sistem başlatılıyor..."}
+        self.latest_news = {"sentiment_score": 0.0, "sentiment_label": "NEUTRAL", "top_headlines": [], "sources": 0}
+        self.latest_derivatives = {"funding_rate": 0.0, "funding_rate_pct": 0.0, "open_interest": 0.0}
+        self.order_error_stats = {}
         self.daily_start_balance = 5000.0
         
     def send_telegram_status(self):
@@ -427,19 +431,25 @@ class BotController:
         ticker_24h = market_data.fetch_24h_ticker(config.SYMBOL)
         mf_data = market_data.fetch_multiframe_data(config.SYMBOL)
         tv_data = tradingview_service.fetch_tradingview_analysis(config.SYMBOL)
-        
+        news_data = news_service.get_crypto_news()
+        deriv_data = market_data.fetch_derivatives_metrics(config.SYMBOL)
+
         ai_res = ai_brain.analyze_market_with_ai(
             ind_summary,
             ticker_24h,
             multiframe_data=mf_data,
             tradingview_data=tv_data,
-            current_position=self.latest_position["side"]
+            current_position=self.latest_position["side"],
+            news_data=news_data,
+            derivatives_data=deriv_data
         )
         self.latest_summary = ind_summary
         self.ticker_24h = ticker_24h
         self.multiframe_summary = mf_data
         self.latest_ai_decision = ai_res
         self.latest_tradingview = tv_data
+        self.latest_news = news_data
+        self.latest_derivatives = deriv_data
         
         report = (
             f"🧠 *ANLIK GROQ AI TEKNİK ANALİZ RAPORU*\n\n"
@@ -499,6 +509,11 @@ class BotController:
                 reasoning="Simülasyon test işlemi kaydedildi."
             )
 
+    def record_order_error(self, error_type: str, detail: str = ""):
+        """Tracks failed order reasons for post-trade analysis."""
+        self.order_error_stats[error_type] = self.order_error_stats.get(error_type, 0) + 1
+        print(f"[ORDER-ERROR] {error_type}: {detail} (total: {self.order_error_stats[error_type]})")
+
     def get_dashboard_state(self) -> dict:
         daily_pnl = round(self.latest_balance - self.daily_start_balance, 2)
         daily_pnl_pct = round((daily_pnl / (self.daily_start_balance + 1e-5)) * 100, 2)
@@ -534,6 +549,17 @@ class BotController:
             "tradingview": self.latest_tradingview,
             "ai_decision": self.latest_ai_decision,
             "multiframe": self.multiframe_summary,
+            "news": {
+                "sentiment_score": self.latest_news.get("sentiment_score", 0.0),
+                "sentiment_label": self.latest_news.get("sentiment_label", "NEUTRAL"),
+                "top_headlines": self.latest_news.get("top_headlines", []),
+                "sources": self.latest_news.get("sources", 0)
+            },
+            "derivatives": {
+                "funding_rate_pct": self.latest_derivatives.get("funding_rate_pct", 0.0),
+                "open_interest": self.latest_derivatives.get("open_interest", 0.0)
+            },
+            "order_error_stats": self.order_error_stats,
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -717,14 +743,22 @@ class BotController:
                         time.sleep(config.CHECK_INTERVAL_SECONDS)
                         continue
 
-                    # 3. Request Groq AI Decision with TradingView Context
+                    # 3. Request Groq AI Decision with TradingView + News + Derivatives Context
                     print("🧠 Consulting Groq Llama-3.3 AI Brain...")
+                    news_data = news_service.get_crypto_news()
+                    deriv_data = market_data.fetch_derivatives_metrics(config.SYMBOL)
+                    self.latest_news = news_data
+                    self.latest_derivatives = deriv_data
+                    print(f"📰 News Sentiment: {news_data.get('sentiment_label')} ({news_data.get('sentiment_score')}) | "
+                          f"Funding: {deriv_data.get('funding_rate_pct')}% | OI: {deriv_data.get('open_interest')} BTC")
                     ai_decision = ai_brain.analyze_market_with_ai(
                         self.latest_summary,
                         self.ticker_24h,
                         multiframe_data=self.multiframe_summary,
                         tradingview_data=self.latest_tradingview,
-                        current_position=self.latest_position["side"]
+                        current_position=self.latest_position["side"],
+                        news_data=news_data,
+                        derivatives_data=deriv_data
                     )
                     self.latest_ai_decision = ai_decision
                     
@@ -813,6 +847,7 @@ class BotController:
                                 )
                             else:
                                 print(f"[ERROR] Market order FAILED for {action} - trade NOT logged.")
+                                self.record_order_error("market_order_failed", f"{action} {trade_params['quantity']} @ {trade_params['entry_price']}")
                                 self.notifier.send_message(
                                     f"❌ *İŞLEM BAŞARISIZ:* {action} sinyali geldi ama piyasa emri yerine getirilemedi "
                                     f"({trade_params['quantity']} {config.SYMBOL} @ ${trade_params['entry_price']:.2f}).\n"

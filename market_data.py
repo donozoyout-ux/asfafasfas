@@ -74,6 +74,45 @@ def fetch_24h_ticker(symbol: str = config.SYMBOL) -> dict:
             continue
     return {}
 
+def fetch_funding_rate(symbol: str = config.SYMBOL) -> dict:
+    """Fetches current funding rate + next funding time to gauge speculative leverage."""
+    sources = config.BINANCE_PUBLIC_API_URLS if hasattr(config, "BINANCE_PUBLIC_API_URLS") else [config.BINANCE_PUBLIC_API_URL]
+    for base in sources:
+        try:
+            res = requests.get(f"{base}/fapi/v1/premiumIndex", params={"symbol": symbol}, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                rate = float(data.get("lastFundingRate", 0))
+                return {
+                    "funding_rate": rate,
+                    "funding_rate_pct": round(rate * 100, 5),
+                    "mark_price": float(data.get("markPrice", 0))
+                }
+        except Exception:
+            continue
+    return {"funding_rate": 0.0, "funding_rate_pct": 0.0, "mark_price": 0.0}
+
+
+def fetch_open_interest(symbol: str = config.SYMBOL) -> dict:
+    """Fetches open interest to measure derivatives speculation intensity."""
+    sources = config.BINANCE_PUBLIC_API_URLS if hasattr(config, "BINANCE_PUBLIC_API_URLS") else [config.BINANCE_PUBLIC_API_URL]
+    for base in sources:
+        try:
+            res = requests.get(f"{base}/fapi/v1/openInterest", params={"symbol": symbol}, timeout=5)
+            if res.status_code == 200:
+                return {"open_interest": float(res.json().get("openInterest", 0))}
+        except Exception:
+            continue
+    return {"open_interest": 0.0}
+
+
+def fetch_derivatives_metrics(symbol: str = config.SYMBOL) -> dict:
+    """Combined funding rate + open interest snapshot for the AI."""
+    funding = fetch_funding_rate(symbol)
+    oi = fetch_open_interest(symbol)
+    return {**funding, **oi}
+
+
 def fetch_multiframe_data(symbol: str = config.SYMBOL) -> dict:
     """Fetches klines for 15m, 1h, and 4h to construct multi-timeframe analysis."""
     frames = {"15m": "15m", "1h": "1h", "4h": "4h"}

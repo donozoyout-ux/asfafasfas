@@ -50,6 +50,8 @@ async function fetchStatus() {
         const pos = d.position || {};
         const ai = d.ai_decision || {};
         const mf = d.multiframe || {};
+        const news = d.news || {};
+        const deriv = d.derivatives || {};
 
         const price = num(d.price, 0);
         const set = (id, txt, cls) => {
@@ -153,6 +155,29 @@ async function fetchStatus() {
                     trend + '</span><span style="color:var(--muted);">' + fmtUsd(v.last_close) + '</span></div>';
             }).join('');
         }
+
+        const newsEl = document.getElementById('news-sentiment');
+        if (newsEl) {
+            const label = (news.sentiment_label || 'NEUTRAL').toUpperCase();
+            const sc = Number(news.sentiment_score) || 0;
+            newsEl.textContent = label + ' (' + (sc >= 0 ? '+' : '') + sc.toFixed(2) + ')';
+            newsEl.className = 'card-value ' + (label === 'BULLISH' ? 'up' : label === 'BEARISH' ? 'down' : 'flat');
+        }
+        const newsSrc = document.getElementById('news-sources');
+        if (newsSrc) newsSrc.textContent = (news.sources || 0) + ' kaynak';
+        const headlines = document.getElementById('news-headlines');
+        if (headlines) {
+            const tops = (news.top_headlines || []).slice(0, 3);
+            headlines.textContent = tops.length ? '• ' + tops.join('\n• ') : 'Haber çekilemedi';
+        }
+        const fundingEl = document.getElementById('funding-rate');
+        if (fundingEl) {
+            const fr = num(deriv.funding_rate_pct, 5);
+            fundingEl.textContent = fmtPct(fr);
+            fundingEl.className = 'card-value ' + (Math.abs(fr) >= 0.05 ? (fr > 0 ? 'down' : 'up') : 'flat');
+        }
+        const oiEl = document.getElementById('open-interest');
+        if (oiEl) oiEl.textContent = num(deriv.open_interest, 0) ? num(deriv.open_interest, 0).toLocaleString('en-US') + ' BTC' : '—';
 
         const setPair = (id, v, up) => {
             const el = document.getElementById(id);
