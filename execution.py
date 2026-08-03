@@ -43,7 +43,11 @@ class BinanceFuturesExecutor:
             return False
 
     def get_account_balance(self, asset: str = "USDT") -> float:
-        """Fetches available balance for the specified asset (default USDT)."""
+        """
+        Fetches total equity (margin balance) for the specified asset.
+        marginBalance = walletBalance + unrealized PnL, so daily PnL reflects
+        open position changes instead of only free (available) balance.
+        """
         endpoint = "/fapi/v2/account"
         params = {}
         query = self._sign_request(params)
@@ -55,7 +59,7 @@ class BinanceFuturesExecutor:
                 data = res.json()
                 for a in data.get("assets", []):
                     if a["asset"] == asset:
-                        return float(a["availableBalance"])
+                        return float(a["marginBalance"])
             else:
                 print(f"[ERROR] Get balance error {res.status_code}: {res.text}")
         except Exception as e:
