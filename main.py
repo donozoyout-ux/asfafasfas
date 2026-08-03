@@ -829,14 +829,14 @@ class BotController:
                 time.sleep(10)
 
 
-_DASHBOARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "dashboard.html")
+_DASHBOARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "dashboard.html")
 
 def load_dashboard_html() -> str:
     try:
         with open(_DASHBOARD_HTML_PATH, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        return "<html><body><h1>static/dashboard.html bulunamadi</h1></body></html>"
+        return "<html><body><h1>templates/dashboard.html bulunamadi</h1></body></html>"
 
 def print_banner():
     print("=" * 70)
