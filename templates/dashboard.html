@@ -246,6 +246,54 @@ tr:hover td { background: rgba(255,255,255,0.02); }
     padding: 10px 24px 18px; color: var(--muted);
     font-size: 11px; font-family: 'JetBrains Mono', monospace;
 }
+.settings-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; padding: 16px 18px;
+}
+.settings-item { display: flex; flex-direction: column; gap: 6px; }
+.settings-item label {
+    font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase;
+}
+.settings-item input {
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 9px 11px; font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; outline: none;
+}
+.settings-item input:focus { border-color: var(--blue); }
+.panel-actions { padding: 0 18px 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+.btn-save { background: var(--blue); border-color: transparent; color: #04121f; }
+.btn-save:hover { filter: brightness(1.15); }
+.trade-form {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; padding: 16px 18px;
+}
+.trade-form select {
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border); color: var(--text);
+    border-radius: 7px; padding: 9px 11px; font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; outline: none;
+}
+.btn-long { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+.btn-long:hover { background: rgba(0,232,143,0.2); }
+.btn-short { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+.btn-short:hover { background: rgba(255,77,109,0.2); }
+.report-box { padding: 16px 18px; min-height: 90px; }
+.report-tabs { display: flex; gap: 8px; padding: 14px 18px 0; }
+.report-tab {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    padding: 7px 14px; border-radius: 7px; font-size: 11px; font-weight: 700;
+    cursor: pointer; letter-spacing: 0.05em;
+}
+.report-tab.active { background: var(--blue); border-color: transparent; color: #04121f; }
+.report-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px; padding: 16px 18px;
+}
+.report-stat {
+    background: rgba(0,0,0,0.25); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+}
+.report-stat .v { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700; }
+.report-stat .k { font-size: 10px; color: var(--muted); margin-top: 3px; letter-spacing: 0.06em; text-transform: uppercase; }
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
@@ -413,6 +461,96 @@ tr:hover td { background: rgba(255,255,255,0.02); }
                     <tr><td colspan="9"><div class="empty">Yükleniyor...</div></td></tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <div class="main-grid">
+        <div class="panel">
+            <div class="panel-head">
+                <div class="panel-title"><span class="dot" style="background:var(--blue);"></span>Bot Ayarları</div>
+            </div>
+            <div class="settings-grid">
+                <div class="settings-item">
+                    <label>Kaldıraç (x)</label>
+                    <input type="number" id="set-leverage" min="1" max="125" step="1"/>
+                </div>
+                <div class="settings-item">
+                    <label>Risk / Trade (%)</label>
+                    <input type="number" id="set-risk" min="0.1" max="20" step="0.1"/>
+                </div>
+                <div class="settings-item">
+                    <label>Güven Eşiği (%)</label>
+                    <input type="number" id="set-confidence" min="0" max="100" step="1"/>
+                </div>
+                <div class="settings-item">
+                    <label>Tarama Aralığı (sn)</label>
+                    <input type="number" id="set-interval" min="5" max="3600" step="5"/>
+                </div>
+                <div class="settings-item">
+                    <label>SL Çarpanı (ATR)</label>
+                    <input type="number" id="set-sl" min="0.5" max="5" step="0.1"/>
+                </div>
+                <div class="settings-item">
+                    <label>TP Çarpanı (ATR)</label>
+                    <input type="number" id="set-tp" min="1" max="8" step="0.1"/>
+                </div>
+                <div class="settings-item">
+                    <label>Günlük Hedef (%)</label>
+                    <input type="number" id="set-target" min="0.1" max="50" step="0.1"/>
+                </div>
+                <div class="settings-item">
+                    <label>Max Günlük Kayıp (%)</label>
+                    <input type="number" id="set-dd" min="0.5" max="50" step="0.1"/>
+                </div>
+            </div>
+            <div class="panel-actions">
+                <button class="btn btn-save" id="btn-save-settings">💾 Ayarları Uygula</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-head">
+                <div class="panel-title"><span class="dot" style="background:var(--amber);"></span>Manuel İşlem Aç</div>
+            </div>
+            <div class="trade-form">
+                <div class="settings-item">
+                    <label>Yön</label>
+                    <select id="trade-side">
+                        <option value="LONG">LONG (Al)</option>
+                        <option value="SHORT">SHORT (Sat)</option>
+                    </select>
+                </div>
+                <div class="settings-item">
+                    <label>Miktar (BTC)</label>
+                    <input type="number" id="trade-qty" min="0.001" step="0.001" value="0.002"/>
+                </div>
+                <div class="settings-item">
+                    <label>SL Çarpanı (ATR)</label>
+                    <input type="number" id="trade-sl" min="0.5" step="0.1" value="1.5"/>
+                </div>
+                <div class="settings-item">
+                    <label>TP Çarpanı (ATR)</label>
+                    <input type="number" id="trade-tp" min="1" step="0.1" value="2.5"/>
+                </div>
+            </div>
+            <div class="panel-actions">
+                <button class="btn btn-long" id="btn-trade">🚀 İşlemi Aç</button>
+                <span id="trade-side-hint" style="font-size:11px;color:var(--muted);align-self:center;">LONG seçili</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-head">
+            <div class="panel-title"><span class="dot" style="background:var(--purple);"></span>Raporlar & Durum</div>
+        </div>
+        <div class="report-tabs">
+            <button class="report-tab active" data-report="risk">🛡️ Risk</button>
+            <button class="report-tab" data-report="performance">📈 Performans</button>
+            <button class="report-tab" data-report="learning">🧠 Öğrenme</button>
+        </div>
+        <div class="report-grid" id="report-content">
+            <div class="empty">Rapor yükleniyor...</div>
         </div>
     </div>
 

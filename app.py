@@ -14,6 +14,8 @@ except Exception:
 
 import config
 import trade_logger
+import settings
+import learning_engine
 from main import BotController
 
 app = Flask(__name__)
@@ -49,6 +51,54 @@ def api_status():
 def api_trades():
     trades = trade_logger.get_recent_trades(limit=20)
     return jsonify(trades)
+
+
+@app.route('/api/settings', methods=['GET'])
+def api_settings_get():
+    return jsonify({'settings': settings.get_all(), 'editable': list(settings.EDITABLE_FIELDS.keys())})
+
+
+@app.route('/api/settings', methods=['POST'])
+def api_settings_post():
+    body = request.get_json() or {}
+    pairs = body.get('settings') or body
+    if not bot_instance:
+        return jsonify({'success': False, 'message': 'Bot başlatılmadı'}), 500
+    result = bot_instance.update_runtime_settings(pairs)
+    return jsonify({'success': not result.get('errors'), 'message': f"Uygulandı: {list(result.get('applied', {}).keys()) or 'yok'}", 'result': result})
+
+
+@app.route('/api/reports/risk', methods=['GET'])
+def api_report_risk():
+    if not bot_instance:
+        return jsonify({}), 500
+    return jsonify(bot_instance.get_risk_report())
+
+
+@app.route('/api/reports/performance', methods=['GET'])
+def api_report_performance():
+    if not bot_instance:
+        return jsonify({}), 500
+    return jsonify(bot_instance.get_performance_report())
+
+
+@app.route('/api/reports/learning', methods=['GET'])
+def api_report_learning():
+    return jsonify({'report': learning_engine.format_learning_report()})
+
+
+@app.route('/api/manual_trade', methods=['POST'])
+def api_manual_trade():
+    body = request.get_json() or {}
+    if not bot_instance:
+        return jsonify({'success': False, 'message': 'Bot başlatılmadı'}), 500
+    result = bot_instance.manual_trade(
+        side=body.get('side', 'LONG'),
+        qty=float(body['qty']) if body.get('qty') else None,
+        sl_mult=float(body['sl_mult']) if body.get('sl_mult') else None,
+        tp_mult=float(body['tp_mult']) if body.get('tp_mult') else None,
+    )
+    return jsonify(result)
 
 
 @app.route('/api/action', methods=['POST'])

@@ -22,6 +22,7 @@ import trade_logger
 import tradingview_service
 import learning_engine
 import news_service
+import settings
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -166,6 +167,8 @@ def _self_ping_loop():
 class BotController:
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
+        import settings
+        settings.load()
         self.executor = BinanceFuturesExecutor()
         self.notifier = TelegramNotifier()
         self.paused = False
@@ -463,6 +466,119 @@ class BotController:
         )
         self.notifier.send_message(report)
 
+    def manual_trade(self, side: str = "LONG", qty: float = None, sl_mult: float = None, tp_mult: float = None) -> dict:
+        """Opens a manual LONG/SHORT order with custom qty and ATR SL/TP multipliers.
+        Returns {'success': bool, 'message': str, 'trade': {...}}"""
+        current_price = self.latest_summary.get('current_price', 0) or market_data.fetch_current_price(config.SYMBOL)
+        atr_14 = self.latest_summary.get('atr_14', 0) or 200.0
+        side = str(side).upper()
+        if side not in ("LONG", "SHORT"):
+            return {"success": False, "message": f"Geçersiz yön: {side}"}
+        sl_mult = sl_mult if sl_mult else config.ATR_SL_MULTIPLIER
+        tp_mult = tp_mult if tp_mult else config.ATR_TP_MULTIPLIER
+        qty = qty if qty else 0.002
+
+        if side == "LONG":
+            sl_price = round(current_price - (atr_14 * sl_mult), 2)
+            tp_price = round(current_price + (atr_14 * tp_mult), 2)
+            order_side = "BUY"
+        else:
+            sl_price = round(current_price + (atr_14 * sl_mult), 2)
+            tp_price = round(current_price - (atr_14 * tp_mult), 2)
+            order_side = "SELL"
+
+        print(f"\n⚡ MANUAL {side} TRADE: {qty} BTC @ ${current_price:.2f} | SL ${sl_price} | TP ${tp_price}")
+
+        if self.dry_run:
+            self.active_trade_id = trade_logger.log_trade_entry(
+                symbol=config.SYMBOL, side=side, entry_price=current_price,
+                quantity=qty, sl_price=sl_price, tp_price=tp_price,
+                ai_confidence=99, ai_reasoning=f"Manuel {side} işlem (DRY-RUN).",
+                indicator_summary=self.latest_summary
+            )
+            self.notifier.send_trade_alert(
+                action=f"[DRY-RUN] {side}", price=current_price, qty=qty,
+                sl=sl_price, tp=tp_price, reasoning="Manuel işlem simüle edildi."
+            )
+            return {"success": True, "message": f"[DRY-RUN] {side} {qty} BTC simüle edildi", "trade": {"side": side, "qty": qty, "price": current_price, "sl": sl_price, "tp": tp_price}}
+
+        if self.latest_position.get("side") != "FLAT":
+            return {"success": False, "message": f"Zaten açık pozisyon var: {self.latest_position['side']}"}
+
+        order = self.executor.place_market_order(config.SYMBOL, order_side, qty)
+        if not order:
+            self.record_order_error("manual_trade_failed", f"{side} {qty} @ {current_price}")
+            return {"success": False, "message": "Piyasa emri yerine getirilemedi (bakiye/kaldıraç yetersiz olabilir)."}
+
+        time.sleep(1)
+        self.executor.place_stop_loss_order(config.SYMBOL, side, sl_price, qty)
+        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty)
+        self.active_trade_id = trade_logger.log_trade_entry(
+            symbol=config.SYMBOL, side=side, entry_price=current_price,
+            quantity=qty, sl_price=sl_price, tp_price=tp_price,
+            ai_confidence=99, ai_reasoning=f"Panelden manuel {side} işlem açıldı.",
+            indicator_summary=self.latest_summary
+        )
+        self.notifier.send_trade_alert(
+            action=side, price=current_price, qty=qty,
+            sl=sl_price, tp=tp_price, reasoning="Panelden manuel işlem açıldı."
+        )
+        return {"success": True, "message": f"{side} {qty} BTC işlem açıldı", "trade": {"side": side, "qty": qty, "price": current_price, "sl": sl_price, "tp": tp_price}}
+
+    def update_runtime_settings(self, pairs: dict) -> dict:
+        """Applies settings via settings module and pushes leverage to Binance if changed."""
+        import settings
+        result = settings.update(pairs)
+        if "leverage" in result.get("applied", {}):
+            try:
+                if not self.dry_run:
+                    self.executor.set_leverage(config.SYMBOL, int(config.LEVERAGE))
+                print(f"[SETTINGS] Leverage applied: {config.LEVERAGE}x")
+            except Exception as e:
+                print(f"[SETTINGS] Leverage apply failed: {e}")
+        if result.get("applied"):
+            self.notifier.send_message(
+                f"⚙️ *AYARLAR GÜNCELLENDİ*\n" + "\n".join(
+                    f"• {k}: {v}" for k, v in result["applied"].items()
+                )
+            )
+        return result
+
+    def get_risk_report(self) -> dict:
+        daily_pnl = self.latest_balance - self.daily_start_balance
+        daily_pct = (daily_pnl / self.daily_start_balance * 100) if self.daily_start_balance > 0 else 0
+        target = config.DAILY_TARGET_PROFIT_PCT * 100
+        max_dd = config.MAX_DAILY_DRAWDOWN_PCT * 100
+        if daily_pct >= target:
+            status = "TARGET_MET"
+        elif daily_pct <= -max_dd:
+            status = "CIRCUIT_BREAKER"
+        else:
+            status = "ACTIVE"
+        return {
+            "status": status,
+            "daily_pnl": round(daily_pnl, 2),
+            "daily_pnl_pct": round(daily_pct, 2),
+            "daily_target_pct": target,
+            "max_drawdown_pct": max_dd,
+            "risk_per_trade_pct": config.RISK_PER_TRADE_PCT * 100,
+            "order_error_stats": self.order_error_stats
+        }
+
+    def get_performance_report(self) -> dict:
+        closed = trade_logger.get_closed_trades(limit=50)
+        total = len(closed)
+        wins = sum(1 for t in closed if t.get("pnl_usdt", 0) > 0)
+        losses = sum(1 for t in closed if t.get("pnl_usdt", 0) < 0)
+        total_pnl = sum(t.get("pnl_usdt", 0) for t in closed)
+        return {
+            "total_closed": total,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round((wins / total * 100) if total else 0, 1),
+            "total_pnl_usdt": round(total_pnl, 2)
+        }
+
     def force_test_trade(self):
         """Triggers an instant manual test order on Binance Futures Testnet."""
         current_price = self.latest_summary.get('current_price', 60000.0)
@@ -560,6 +676,7 @@ class BotController:
                 "open_interest": self.latest_derivatives.get("open_interest", 0.0)
             },
             "order_error_stats": self.order_error_stats,
+            "settings": settings.get_all(),
             "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 

@@ -179,6 +179,21 @@ async function fetchStatus() {
         const oiEl = document.getElementById('open-interest');
         if (oiEl) oiEl.textContent = num(deriv.open_interest, 0) ? num(deriv.open_interest, 0).toLocaleString('en-US') + ' BTC' : '—';
 
+        const st = d.settings || {};
+        if (st && Object.keys(st).length) {
+            if (!settingsDirty) {
+                const setVal = (id, v, dflt) => { const el = document.getElementById(id); if (el && el.value === '') el.value = v ?? dflt; };
+                setVal('set-leverage', st.leverage, 3);
+                setVal('set-risk', st.risk_per_trade_pct !== undefined ? (st.risk_per_trade_pct * 100).toFixed(1) : 2.0);
+                setVal('set-confidence', st.confidence_threshold, 50);
+                setVal('set-interval', st.check_interval_seconds, 20);
+                setVal('set-sl', st.sl_multiplier, 1.5);
+                setVal('set-tp', st.tp_multiplier, 2.5);
+                setVal('set-target', st.daily_target_profit_pct !== undefined ? (st.daily_target_profit_pct * 100).toFixed(1) : 2.0);
+                setVal('set-dd', st.max_daily_drawdown_pct !== undefined ? (st.max_daily_drawdown_pct * 100).toFixed(1) : 5.0);
+            }
+        }
+
         const setPair = (id, v, up) => {
             const el = document.getElementById(id);
             if (el) { el.textContent = fmtUsd(v); el.className = up !== undefined ? (up ? 'up' : 'down') : ''; }
@@ -285,10 +300,126 @@ async function triggerAction(action) {
     }
 }
 
-function updateTime() {
-    const el = document.getElementById('current-time');
-    if (!el) return;
-    el.innerText = new Date().toISOString().split('T')[1].split('.')[0] + ' UTC';
+let settingsDirty = false;
+
+function showToast(msg, ok = true) {
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);' +
+        'background:var(--panel);border:1px solid ' + (ok ? 'var(--green)' : 'var(--red)') + ';color:var(--text);' +
+        'padding:10px 18px;border-radius:8px;font-size:13px;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,0.4);' +
+        'max-width:80%;text-align:center;';
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+}
+
+async function saveSettings() {
+    const payload = {
+        settings: {
+            leverage: parseFloat(document.getElementById('set-leverage')?.value),
+            risk_per_trade_pct: parseFloat(document.getElementById('set-risk')?.value) / 100,
+            confidence_threshold: parseFloat(document.getElementById('set-confidence')?.value),
+            check_interval_seconds: parseFloat(document.getElementById('set-interval')?.value),
+            sl_multiplier: parseFloat(document.getElementById('set-sl')?.value),
+            tp_multiplier: parseFloat(document.getElementById('set-tp')?.value),
+            daily_target_profit_pct: parseFloat(document.getElementById('set-target')?.value) / 100,
+            max_daily_drawdown_pct: parseFloat(document.getElementById('set-dd')?.value) / 100
+        }
+    };
+    const btn = document.getElementById('btn-save-settings');
+    try {
+        if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+        const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        showToast(data.message || 'Ayarlar kaydedildi', !!data.success);
+        settingsDirty = false;
+        fetchStatus();
+    } catch (e) {
+        showToast('Hata: ' + e, false);
+    } finally {
+        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    }
+}
+
+async function openManualTrade() {
+    const side = document.getElementById('trade-side')?.value || 'LONG';
+    const qty = parseFloat(document.getElementById('trade-qty')?.value) || 0.002;
+    const sl = parseFloat(document.getElementById('trade-sl')?.value) || 1.5;
+    const tp = parseFloat(document.getElementById('trade-tp')?.value) || 2.5;
+    const btn = document.getElementById('btn-trade');
+    try {
+        if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+        const res = await fetch('/api/manual_trade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ side, qty, sl_mult: sl, tp_mult: tp })
+        });
+        const data = await res.json();
+        showToast(data.message || 'İşlem gönderildi', !!data.success);
+        fetchStatus();
+        fetchTrades();
+    } catch (e) {
+        showToast('Hata: ' + e, false);
+    } finally {
+        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    }
+}
+
+async function loadReport(type) {
+    const content = document.getElementById('report-content');
+    if (!content) return;
+    content.innerHTML = '<div class="empty">Yükleniyor...</div>';
+    document.querySelectorAll('.report-tab').forEach(t => t.classList.toggle('active', t.dataset.report === type));
+    try {
+        const res = await fetch('/api/reports/' + type);
+        const data = await res.json();
+        let cards;
+        if (type === 'risk') {
+            const s = data.status || 'ACTIVE';
+            cards = [
+                ['Durum', s === 'TARGET_MET' ? '🎯 HEDEF' : s === 'CIRCUIT_BREAKER' ? '🛑 DUR' : '✅ AKTİF', s === 'TARGET_MET' ? 'up' : s === 'CIRCUIT_BREAKER' ? 'down' : ''],
+                ['Günlük PnL', (data.daily_pnl >= 0 ? '+' : '') + fmtUsd(data.daily_pnl), data.daily_pnl >= 0 ? 'up' : 'down'],
+                ['Günlük PnL %', fmtPct(data.daily_pnl_pct || 0), data.daily_pnl >= 0 ? 'up' : 'down'],
+                ['Hedef', fmtPct(data.daily_target_pct || 0), ''],
+                ['Max Kayıp', fmtPct(data.max_drawdown_pct || 0), ''],
+                ['Risk/Trade', fmtPct(data.risk_per_trade_pct || 0), '']
+            ];
+            if (data.order_error_stats && Object.keys(data.order_error_stats).length) {
+                const errs = Object.entries(data.order_error_stats).map(([k, v]) => `<div class="report-stat"><div class="v down">${v}</div><div class="k">${k}</div></div>`).join('');
+                cards.push(['<span style="font-size:11px;">Hatalar</span>', errs, '']);
+            }
+        } else if (type === 'performance') {
+            cards = [
+                ['Kapalı İşlem', data.total_closed ?? 0, ''],
+                ['Kazanç', data.wins ?? 0, 'up'],
+                ['Kayıp', data.losses ?? 0, 'down'],
+                ['Kazanma Oranı', (data.win_rate ?? 0) + '%', (data.win_rate ?? 0) >= 50 ? 'up' : 'down'],
+                ['Toplam PnL', (data.total_pnl_usdt >= 0 ? '+' : '') + fmtUsd(data.total_pnl_usdt), (data.total_pnl_usdt ?? 0) >= 0 ? 'up' : 'down']
+            ];
+        } else {
+            const report = (data.report || 'Veri yok').replace(/\*\*/g, '').replace(/^[-*]\s*/gm, '• ');
+            content.innerHTML = '<div style="padding:16px 18px;font-size:12px;line-height:1.7;color:var(--muted);font-family:JetBrains Mono,monospace;white-space:pre-line;max-height:280px;overflow-y:auto;">' + report + '</div>';
+            return;
+        }
+        content.innerHTML = cards.map(c =>
+            '<div class="report-stat"><div class="v ' + (c[2] || '') + '">' + c[1] + '</div><div class="k">' + c[0] + '</div></div>'
+        ).join('');
+    } catch (e) {
+        content.innerHTML = '<div class="empty">Rapor yüklenemedi: ' + e + '</div>';
+    }
+}
+
+function updateTradeHint() {
+    const s = document.getElementById('trade-side');
+    const hint = document.getElementById('trade-side-hint');
+    if (hint && s) {
+        hint.textContent = s.value === 'LONG' ? '🟢 LONG seçili' : '🔴 SHORT seçili';
+        hint.style.color = s.value === 'LONG' ? 'var(--green)' : 'var(--red)';
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -297,11 +428,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-pause')?.addEventListener('click', () => triggerAction('toggle_pause'));
     document.getElementById('btn-test')?.addEventListener('click', () => triggerAction('force_trade'));
     document.getElementById('btn-close')?.addEventListener('click', () => triggerAction('close'));
+    document.getElementById('btn-save-settings')?.addEventListener('click', saveSettings);
+    document.getElementById('btn-trade')?.addEventListener('click', openManualTrade);
+    document.getElementById('trade-side')?.addEventListener('change', updateTradeHint);
+    document.querySelectorAll('#set-leverage,#set-risk,#set-confidence,#set-interval,#set-sl,#set-tp,#set-target,#set-dd')
+        .forEach(el => el?.addEventListener('input', () => { settingsDirty = true; }));
+    document.querySelectorAll('.report-tab').forEach(t =>
+        t.addEventListener('click', () => loadReport(t.dataset.report))
+    );
 
     fetchStatus();
     fetchTrades();
+    loadReport('risk');
     setInterval(fetchStatus, 4000);
     setInterval(fetchTrades, 12000);
     setInterval(updateTime, 1000);
     updateTime();
+    updateTradeHint();
 });
