@@ -1,4 +1,5 @@
 import sys
+import io
 import time
 import argparse
 import os
@@ -6,6 +7,12 @@ import json
 import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 import config
 import market_data

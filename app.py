@@ -1,8 +1,16 @@
+import sys
+import io
 import os
 import threading
 import json
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 import config
 import trade_logger
