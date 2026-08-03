@@ -4,6 +4,7 @@ import requests
 from datetime import datetime
 import config
 import trade_logger
+import learning_engine
 
 class TelegramNotifier:
     def __init__(self):
@@ -144,7 +145,8 @@ class TelegramNotifier:
                                     "/analyze - Anında Groq AI teknik analizi tetikle\n"
                                     "/analysis - DETAYLI analiz: AI neden bu kararı verdi?\n"
                                     "/indicators - Tüm teknik indikatörlerin özeti\n"
-                                    "/multiframe - Çoklu zaman dilimi trend analizi (15m/1h/4h)\n\n"
+                                    "/multiframe - Çoklu zaman dilimi trend analizi (15m/1h/4h)\n"
+                                    "/learn - Bot öğrenme durumu: kazanılan/kaybedilen dersler\n\n"
                                     "💰 *BALANCE & POZİSYON*\n"
                                     "/balance - Bakiye ve günlük PnL bilgisi\n"
                                     "/position - Aktif pozisyon detayı ve likidasyon fiyatı\n"
@@ -176,6 +178,9 @@ class TelegramNotifier:
 
                             elif text.startswith("/multiframe"):
                                 bot_controller.send_telegram_multiframe()
+
+                            elif text.startswith("/learn"):
+                                self.send_message(learning_engine.format_learning_report())
 
                             elif text.startswith("/position"):
                                 bot_controller.send_telegram_position()

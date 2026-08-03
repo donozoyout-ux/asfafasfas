@@ -2,6 +2,7 @@ import json
 import requests
 import config
 import trade_logger
+import learning_engine
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -44,12 +45,27 @@ def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe
     Sends technical data + TradingView TA ratings + support/resistance + market structure + past trade performance memory
     to Groq Llama-3.3-70b and receives self-adapting trading signal JSON.
     """
-    learning_memory = trade_logger.get_ai_learning_context(limit=5)
+    learning_memory = learning_engine.build_learning_context(limit=6)
     mf_str = json.dumps(multiframe_data) if multiframe_data else "15m: ACTIVE, 1h: BULLISH, 4h: BULLISH"
     tv_str = json.dumps(tradingview_data) if tradingview_data else "TradingView: N/A"
     
+    # Dynamic confidence threshold from learning engine adaptation
+    try:
+        closed = trade_logger.get_closed_trades(limit=10)
+        adaptation = learning_engine.compute_adaptation(closed)
+        dyn_threshold = adaptation["confidence_threshold"]
+        dyn_risk = adaptation["risk_per_trade_pct"]
+    except Exception:
+        dyn_threshold = config.CONFIDENCE_THRESHOLD
+        dyn_risk = config.RISK_PER_TRADE_PCT * 100
+    
     user_prompt = f"""
 ANALYZE MARKET STATE FOR {config.SYMBOL}:
+
+[CURRENT ADAPTIVE STRATEGY]
+- Confidence Threshold To Execute: >= {dyn_threshold}% (dynamically learned)
+- Risk Per Trade: {dyn_risk}% of account (includes 0.10% roundtrip fees)
+- Only LONG/SHORT if confidence >= {dyn_threshold}%. Otherwise HOLD.
 
 [MARKET SNAPSHOT & CRASH STATUS]
 - Current Mark Price: ${indicator_summary['current_price']}

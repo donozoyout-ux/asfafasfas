@@ -20,6 +20,7 @@ import indicators
 import ai_brain
 import trade_logger
 import tradingview_service
+import learning_engine
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -582,6 +583,43 @@ class BotController:
         risk_mgr = RiskManager(initial_balance=self.latest_balance)
         cycle_count = 0
         previous_position_side = "FLAT"
+
+        # Adopt any pre-existing open position as our own trade so PnL is tracked on close
+        try:
+            if not self.dry_run:
+                existing_pos = self.executor.get_open_position(config.SYMBOL)
+                if existing_pos["side"] != "FLAT":
+                    self.latest_position = existing_pos
+                    previous_position_side = existing_pos["side"]
+                    self.active_trade_id = trade_logger.log_trade_entry(
+                        symbol=config.SYMBOL,
+                        side=existing_pos["side"],
+                        entry_price=existing_pos["entry_price"],
+                        quantity=existing_pos["amount"],
+                        sl_price=0.0,
+                        tp_price=0.0,
+                        ai_confidence=0,
+                        ai_reasoning="Bot başlarken var olan pozisyon benimsendi.",
+                        indicator_summary=self.latest_summary
+                    )
+                    print(f"[ADOPT] Mevcut {existing_pos['side']} pozisyon benimsendi (Trade #{self.active_trade_id})")
+                else:
+                    # Binance'te pozisyon yoksa, DB'de kalan ölü OPEN kayıtlarını kapat
+                    # (önceki seanslardan düzgün loglanmadan kapanmış pozisyonlar)
+                    try:
+                        stale = trade_logger.get_stale_open_trades()
+                        for t in stale:
+                            trade_logger.update_trade_exit(
+                                trade_id=t["id"],
+                                exit_price=self.latest_summary.get("current_price", t["entry_price"]),
+                                pnl_usdt=t["entry_price"] * 0.0,
+                                pnl_pct=0.0
+                            )
+                            print(f"[ADOPT] Ölü OPEN kayıt #{t['id']} kapatıldı (Binance pozisyonu FLAT)")
+                    except Exception as e2:
+                        print(f"[WARN] Stale open trade cleanup failed: {e2}")
+        except Exception as e:
+            print(f"[WARN] Position adoption check failed: {e}")
         
         while True:
             try:
@@ -640,6 +678,25 @@ class BotController:
                             f"💰 *Brüt Kâr:* ${realized['realized_pnl']:+.2f}\n"
                             f"🧾 *Komisyon:* ${realized['commission']:.2f}"
                         )
+                        # Trigger learning update after each closed trade
+                        try:
+                            closed = trade_logger.get_closed_trades(limit=10)
+                            adaptation = learning_engine.compute_adaptation(closed)
+                            lessons = learning_engine.generate_lessons(
+                                learning_engine.analyze_patterns(closed)
+                            )
+                            learn_msg = (
+                                f"🧠 *ÖĞRENME GÜNCELLEMESİ*\n\n"
+                                f"• Yeni Güven Eşiği: %{adaptation['confidence_threshold']}\n"
+                                f"• İşlem Başına Risk: %{adaptation['risk_per_trade_pct']}\n"
+                                f"• Seri: {adaptation['consecutive_wins']}W / {adaptation['consecutive_losses']}L\n"
+                                f"• Genel Win Rate: %{adaptation['win_rate']}"
+                            )
+                            if lessons:
+                                learn_msg += f"\n\n🎓 *En Kritik Ders:*\n{lessons[0]}"
+                            self.notifier.send_message(learn_msg)
+                        except Exception as e:
+                            print(f"[WARN] Learning update failed: {e}")
 
                 previous_position_side = self.latest_position["side"]
 
@@ -677,15 +734,26 @@ class BotController:
                     print(f"🤖 AI Recommendation: [{action}] (Confidence: {confidence}%)")
                     print(f"💬 AI Reasoning: {reasoning}")
                     
-                    # 4. Execute Trade if High Conviction
-                    if action in ["LONG", "SHORT"] and confidence >= config.CONFIDENCE_THRESHOLD:
+                    # Get adaptive confidence threshold from learning engine
+                    adaptation = {"confidence_threshold": config.CONFIDENCE_THRESHOLD,
+                                  "risk_per_trade_pct": config.RISK_PER_TRADE_PCT * 100}
+                    try:
+                        closed = trade_logger.get_closed_trades(limit=10)
+                        adaptation = learning_engine.compute_adaptation(closed)
+                        current_threshold = adaptation["confidence_threshold"]
+                    except Exception:
+                        current_threshold = config.CONFIDENCE_THRESHOLD
+                    
+                    # 4. Execute Trade if High Conviction (adaptive threshold)
+                    if action in ["LONG", "SHORT"] and confidence >= current_threshold:
                         trade_params = risk_mgr.calculate_position_parameters(
                             account_balance=self.latest_balance,
                             entry_price=self.latest_summary['current_price'],
                             atr_14=self.latest_summary['atr_14'],
                             side=action,
                             sl_mult=sl_mult,
-                            tp_mult=tp_mult
+                            tp_mult=tp_mult,
+                            risk_pct=adaptation.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) / 100
                         )
                         
                         print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")

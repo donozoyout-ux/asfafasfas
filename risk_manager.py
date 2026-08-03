@@ -42,12 +42,16 @@ class RiskManager:
         atr_14: float,
         side: str,
         sl_mult: float = config.ATR_SL_MULTIPLIER,
-        tp_mult: float = config.ATR_TP_MULTIPLIER
+        tp_mult: float = config.ATR_TP_MULTIPLIER,
+        risk_pct: float = None
     ) -> dict:
         """
         Calculates exact Stop-Loss, Take-Profit, and position size (quantity in BTC)
         matching account risk tolerance and accounting for Binance Futures trading fees.
+        risk_pct can be overridden by the learning engine (adaptive risk).
         """
+        if risk_pct is None:
+            risk_pct = config.RISK_PER_TRADE_PCT
         # Ensure Take Profit covers roundtrip trading fees (0.10%) + ATR target
         fee_offset = entry_price * ROUNDTRIP_FEE_RATE
         
@@ -63,8 +67,8 @@ class RiskManager:
         sl_distance = abs(entry_price - sl_price)
         sl_distance_pct = sl_distance / entry_price
         
-        # Risk amount in USDT = Balance * Risk_per_trade_pct (e.g. 1.5%)
-        risk_usdt = account_balance * config.RISK_PER_TRADE_PCT
+        # Risk amount in USDT = Balance * Risk_per_trade_pct (adaptive)
+        risk_usdt = account_balance * risk_pct
         
         # Position Notional Value = Risk_USDT / SL_distance_pct
         notional_val = risk_usdt / (sl_distance_pct + 1e-6)

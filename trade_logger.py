@@ -27,9 +27,32 @@ def init_db():
             ai_reasoning TEXT,
             rsi_val REAL,
             ema200_trend TEXT,
-            atr_val REAL
+            atr_val REAL,
+            market_structure TEXT,
+            multiframe_trend TEXT,
+            rsi_status TEXT,
+            rsi_divergence TEXT,
+            crash_alert INTEGER DEFAULT 0,
+            hold_time_min INTEGER DEFAULT 0
         )
     """)
+    # Migrate old tables: add missing learning columns if they don't exist
+    try:
+        existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(trades)").fetchall()}
+        migrate_cols = {
+            "market_structure": "TEXT",
+            "multiframe_trend": "TEXT",
+            "rsi_status": "TEXT",
+            "rsi_divergence": "TEXT",
+            "crash_alert": "INTEGER DEFAULT 0",
+            "hold_time_min": "INTEGER DEFAULT 0",
+        }
+        for col, col_type in migrate_cols.items():
+            if col not in existing_cols:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
+                print(f"[DB] Added column: {col}")
+    except Exception as e:
+        print(f"[DB] Migration check warning: {e}")
     conn.commit()
     conn.close()
 
@@ -44,14 +67,20 @@ def log_trade_entry(symbol: str, side: str, entry_price: float, quantity: float,
         INSERT INTO trades (
             timestamp, symbol, side, entry_price, exit_price, quantity,
             sl_price, tp_price, pnl_usdt, pnl_pct, status,
-            ai_confidence, ai_reasoning, rsi_val, ema200_trend, atr_val
-        ) VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, 0.0, 0.0, 'OPEN', ?, ?, ?, ?, ?)
+            ai_confidence, ai_reasoning, rsi_val, ema200_trend, atr_val,
+            market_structure, multiframe_trend, rsi_status, rsi_divergence, crash_alert
+        ) VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, 0.0, 0.0, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         now_str, symbol, side, entry_price, quantity,
         sl_price, tp_price, ai_confidence, ai_reasoning,
         indicator_summary.get('rsi_14', 0),
         indicator_summary.get('macro_trend_ema200', 'UNKNOWN'),
-        indicator_summary.get('atr_14', 0)
+        indicator_summary.get('atr_14', 0),
+        indicator_summary.get('market_structure', 'UNKNOWN'),
+        indicator_summary.get('multiframe_trend', 'MIXED'),
+        indicator_summary.get('rsi_status', 'NEUTRAL'),
+        indicator_summary.get('rsi_divergence', 'NONE'),
+        1 if indicator_summary.get('crash_alert') else 0
     ))
     trade_id = cursor.lastrowid
     conn.commit()
@@ -66,14 +95,25 @@ def update_trade_exit(trade_id: int, exit_price: float, pnl_usdt: float, pnl_pct
     cursor = conn.cursor()
     status = "WIN" if pnl_usdt > 0 else "LOSS"
     
+    # Compute hold time in minutes
+    hold_min = 0
+    try:
+        cursor.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            entry_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+            hold_min = int((datetime.now() - entry_ts).total_seconds() / 60)
+    except Exception:
+        pass
+    
     cursor.execute("""
         UPDATE trades 
-        SET exit_price = ?, pnl_usdt = ?, pnl_pct = ?, status = ?
+        SET exit_price = ?, pnl_usdt = ?, pnl_pct = ?, status = ?, hold_time_min = ?
         WHERE id = ?
-    """, (exit_price, pnl_usdt, pnl_pct, status, trade_id))
+    """, (exit_price, pnl_usdt, pnl_pct, status, hold_min, trade_id))
     conn.commit()
     conn.close()
-    print(f"[DB] Trade #{trade_id} closed! Status: {status} | PnL: ${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)")
+    print(f"[DB] Trade #{trade_id} closed! Status: {status} | PnL: ${pnl_usdt:+.2f} ({pnl_pct:+.2f}%) | Hold: {hold_min}m")
 
 def get_performance_summary() -> dict:
     """Returns overall trade performance statistics and win rate."""
@@ -163,3 +203,57 @@ def get_recent_trades(limit: int = 20) -> list:
         }
         for r in rows
     ]
+
+def get_stale_open_trades() -> list:
+    """Returns all trades still marked OPEN in the DB (no longer matching Binance position)."""
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, timestamp, symbol, side, entry_price, exit_price, quantity,
+               pnl_usdt, pnl_pct, status, ai_confidence, ai_reasoning,
+               rsi_val, ema200_trend, atr_val, market_structure,
+               multiframe_trend, rsi_status, rsi_divergence, crash_alert, hold_time_min
+        FROM trades
+        WHERE status = 'OPEN'
+        ORDER BY id ASC
+        """
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    cols = [
+        "id", "timestamp", "symbol", "side", "entry_price", "exit_price", "quantity",
+        "pnl_usdt", "pnl_pct", "status", "ai_confidence", "ai_reasoning",
+        "rsi_val", "ema200_trend", "atr_val", "market_structure",
+        "multiframe_trend", "rsi_status", "rsi_divergence", "crash_alert", "hold_time_min"
+    ]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def get_closed_trades(limit: int = 50) -> list:
+    """Returns closed (WIN/LOSS) trades with full learning context columns."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, timestamp, symbol, side, entry_price, exit_price, quantity,
+               pnl_usdt, pnl_pct, status, ai_confidence, ai_reasoning,
+               rsi_val, ema200_trend, atr_val, market_structure,
+               multiframe_trend, rsi_status, rsi_divergence, crash_alert, hold_time_min
+        FROM trades
+        WHERE status IN ('WIN', 'LOSS')
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    cols = [
+        "id", "timestamp", "symbol", "side", "entry_price", "exit_price", "quantity",
+        "pnl_usdt", "pnl_pct", "status", "ai_confidence", "ai_reasoning",
+        "rsi_val", "ema200_trend", "atr_val", "market_structure",
+        "multiframe_trend", "rsi_status", "rsi_divergence", "crash_alert", "hold_time_min"
+    ]
+    return [dict(zip(cols, r)) for r in rows]
