@@ -5,3 +5,4 @@ __pycache__/
 .vscode/
 test_*.py
 trades.db
+.aider*

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html class="dark" lang="tr">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>NEURAL_TRADER_V1 | Binance AI Trader</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500;700&amp;family=Geist:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(22, 27, 34, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(48, 54, 61, 1);
+        }
+        .neon-glow-primary {
+            box-shadow: 0 0 10px rgba(0, 255, 157, 0.2);
+        }
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.95); }
+        }
+        .animate-pulse-slow {
+            animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #111318; }
+        ::-webkit-scrollbar-thumb { background: #3b4a3f; border-radius: 2px; }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container-low": "#1a1c20",
+                        "surface": "#111318",
+                        "secondary": "#ffb95a",
+                        "surface-container": "#1e2024",
+                        "surface-bright": "#37393e",
+                        "primary-container": "#00ff9d",
+                        "background": "#111318",
+                        "on-background": "#e2e2e8",
+                        "on-surface": "#e2e2e8",
+                        "on-primary-container": "#007143",
+                        "outline-variant": "#3b4a3f",
+                        "surface-container-highest": "#333539",
+                        "surface-container-high": "#282a2e",
+                        "on-surface-variant": "#b9cbbc",
+                        "error": "#ffb4ab",
+                        "primary": "#f4fff3"
+                    },
+                    borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+                    spacing: { "margin-desktop": "24px", "panel-padding": "16px", "gutter": "12px" },
+                    fontFamily: {
+                        "label-mono": ["JetBrains Mono"],
+                        "data-metric": ["Geist"],
+                        "headline-lg": ["Geist"],
+                        "headline-md": ["Geist"],
+                        "body-md": ["Inter"]
+                    },
+                    fontSize: {
+                        "label-mono": ["12px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "500" }],
+                        "data-metric": ["20px", { lineHeight: "24px", letterSpacing: "0.02em", fontWeight: "700" }],
+                        "headline-lg": ["32px", { lineHeight: "40px", letterSpacing: "-0.02em", fontWeight: "700" }],
+                        "headline-md": ["24px", { lineHeight: "32px", letterSpacing: "-0.01em", fontWeight: "600" }],
+                        "body-lg": ["16px", { lineHeight: "24px", fontWeight: "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-background text-on-surface font-body-md overflow-x-hidden antialiased selection:bg-primary-container selection:text-on-primary-container pb-10">
+<header class="fixed top-0 w-full z-50 bg-surface/60 backdrop-blur-xl border-b border-outline-variant/30 flex justify-between items-center h-16 px-margin-desktop w-full">
+<div class="flex items-center gap-4">
+<h1 class="font-headline-md text-headline-md font-bold text-primary-container tracking-tighter uppercase">BINANCE AI TRADER</h1>
+<div class="flex items-center gap-2 bg-surface-container-high px-3 py-1 rounded-full border border-outline-variant/20">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse shadow-[0_0_8px_#00ff9d]"></span>
+<span id="bot-status" class="font-label-mono text-label-mono text-primary-container">RENDER 24/7 CLOUD ACTIVE</span>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="hidden md:flex gap-6 items-center">
+<span class="font-label-mono text-label-mono text-primary font-bold border-b-2 border-primary-container pb-1">Dashboard</span>
+</div>
+</div>
+</header>
+<aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-[240px] bg-surface-container-low border-r border-outline-variant/20 hidden md:flex flex-col py-panel-padding">
+<div class="px-4 mb-8">
+<div class="flex items-center gap-3 mb-2">
+<span class="material-symbols-outlined text-primary-container">rocket_launch</span>
+<div>
+<div class="font-label-mono text-label-mono text-primary font-bold">AI ENGINE</div>
+<div class="text-[10px] text-on-surface-variant font-label-mono">LLAMA-3.3-LIVE</div>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 bg-primary-container/10 text-primary-container border-r-2 border-primary-container" href="#"><span class="material-symbols-outlined">dashboard</span><span class="font-label-mono text-label-mono">Dashboard</span></a>
+</nav>
+<div class="mt-auto px-4">
+<button type="button" id="btn-quick-exec" class="w-full py-2 bg-primary-container text-on-primary-container font-label-mono text-label-mono font-bold rounded hover:opacity-90 active:scale-[0.98] transition-all">Quick Execute</button>
+</div>
+</aside>
+<main class="md:ml-[240px] pt-20 pb-12 px-margin-desktop min-h-screen space-y-gutter">
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+<div class="glass-panel p-panel-padding rounded-lg flex flex-col justify-between">
+<span class="font-label-mono text-label-mono text-on-surface-variant">BTC MARK FİYATI</span>
+<div class="flex items-baseline justify-between mt-2">
+<span id="btc-price" class="font-data-metric text-data-metric text-on-surface">—</span>
+<span id="btc-change" class="text-[12px] text-primary-container font-label-mono font-bold">—</span>
+</div>
+</div>
+<div class="glass-panel p-panel-padding rounded-lg flex flex-col justify-between">
+<span class="font-label-mono text-label-mono text-on-surface-variant">KASA BAKİYESİ</span>
+<div class="flex items-baseline justify-between mt-2">
+<span id="usdt-balance" class="font-data-metric text-data-metric text-on-surface">—</span>
+<span id="daily-pnl" class="text-[12px] text-primary-container font-label-mono font-bold">PnL: —</span>
+</div>
+</div>
+<div class="glass-panel p-panel-padding rounded-lg flex flex-col justify-between">
+<span class="font-label-mono text-label-mono text-on-surface-variant">GÜNLÜK HEDEF &amp; LİMİTLER</span>
+<div class="mt-2 flex flex-col gap-1">
+<div class="flex justify-between font-label-mono text-[10px]">
+<span id="daily-target-label">Target %1.0</span>
+<span id="max-stop-label">Max Stop %3.0</span>
+</div>
+<div class="w-full h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div id="daily-progress" class="bg-primary-container h-full w-0 shadow-[0_0_8px_#00ff9d] transition-all duration-500"></div>
+</div>
+</div>
+</div>
+<div class="glass-panel p-panel-padding rounded-lg flex flex-col justify-between border-l-4 border-primary-container">
+<span class="font-label-mono text-label-mono text-on-surface-variant uppercase">AKTİF POZİSYON: <span id="pos-side" class="text-on-surface-variant font-bold">—</span></span>
+<div class="flex flex-col mt-2">
+<div class="flex justify-between items-baseline">
+<span id="pos-details" class="font-label-mono text-[11px]">Yükleniyor...</span>
+<span id="pos-pnl" class="font-bold font-label-mono text-[11px] text-on-surface-variant">—</span>
+</div>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+<div class="lg:col-span-7 space-y-gutter">
+<div class="glass-panel rounded-lg overflow-hidden flex flex-col h-full">
+<div class="px-panel-padding py-3 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container/30">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary-container">psychology</span>
+<h2 class="font-headline-md text-body-lg font-bold tracking-tight uppercase">GROQ LLAMA-3.3 AI KARAR MOTORU</h2>
+</div>
+<span class="px-2 py-0.5 bg-surface-container-highest text-on-surface text-[10px] font-label-mono border border-outline-variant/30">V1.4 STABLE</span>
+</div>
+<div class="p-panel-padding flex-1 flex flex-col gap-6">
+<div class="flex items-center justify-center py-10 bg-surface-container-lowest rounded-lg border border-dashed border-outline-variant/20 relative">
+<div class="text-center relative z-10 w-full px-4">
+<div class="text-[48px] font-bold text-on-surface-variant/20 font-headline-lg tracking-widest absolute -top-4 left-1/2 -translate-x-1/2 pointer-events-none">NEURAL</div>
+<div id="ai-action" class="font-headline-lg text-headline-lg text-on-surface mb-2">HOLD</div>
+<div class="font-label-mono text-on-surface-variant flex items-center justify-center gap-2 mb-3">
+<span class="w-1.5 h-1.5 rounded-full bg-outline"></span>
+<span id="ai-confidence">%0 GÜVEN SEVİYESİ</span>
+</div>
+<p id="ai-reasoning" class="text-[11px] text-on-surface-variant font-label-mono max-w-md mx-auto leading-relaxed">Piyasa taranıyor...</p>
+</div>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+<button type="button" id="btn-analyze" class="flex flex-col items-center justify-center p-4 bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 transition-all active:scale-95 group">
+<span class="material-symbols-outlined mb-2">query_stats</span>
+<span class="font-label-mono text-[11px] font-bold">Analiz Et</span>
+</button>
+<button type="button" id="btn-pause" class="flex flex-col items-center justify-center p-4 bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-all active:scale-95 group">
+<span class="material-symbols-outlined mb-2">pause_circle</span>
+<span class="font-label-mono text-[11px] font-bold">Duraklat / Başlat</span>
+</button>
+<button type="button" id="btn-test-mobile" class="flex flex-col items-center justify-center p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-blue-500/20 transition-all active:scale-95 group md:hidden col-span-2">
+<span class="material-symbols-outlined mb-2">add_circle</span>
+<span class="font-label-mono text-[11px] font-bold">Test İşlemi</span>
+</button>
+<button type="button" id="btn-test" class="hidden md:flex flex-col items-center justify-center p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 transition-all active:scale-95 group col-span-1">
+<span class="material-symbols-outlined mb-2">add_circle</span>
+<span class="font-label-mono text-[11px] font-bold">Test İşlemi Aç</span>
+</button>
+<button type="button" id="btn-close" class="flex flex-col items-center justify-center p-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 transition-all active:scale-95 group">
+<span class="material-symbols-outlined mb-2">cancel</span>
+<span class="font-label-mono text-[11px] font-bold">Pozisyonu Kapat</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<div class="lg:col-span-5 space-y-gutter">
+<div class="glass-panel rounded-lg overflow-hidden flex flex-col h-full">
+<div class="px-panel-padding py-3 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container/30">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary-container">monitoring</span>
+<h2 class="font-headline-md text-body-lg font-bold tracking-tight uppercase">TEKNİK İNDİKATÖRLER</h2>
+</div>
+<div class="flex items-center gap-1.5 px-2 py-0.5 bg-primary-container/10 border border-primary-container/20 rounded">
+<span class="w-1.5 h-1.5 rounded-full bg-primary-container"></span>
+<span id="market-status" class="text-primary-container text-[10px] font-label-mono">Market Durumu Normal</span>
+</div>
+</div>
+<div class="p-panel-padding space-y-5">
+<div class="grid grid-cols-2 gap-3">
+<div class="p-3 bg-surface-container-low border border-outline-variant/10 rounded">
+<div class="font-label-mono text-[10px] text-on-surface-variant mb-1">RSI (14)</div>
+<div id="rsi-val" class="font-data-metric text-lg text-secondary">—</div>
+<div class="w-full h-1 bg-surface-container-highest mt-2 rounded-full">
+<div id="rsi-bar" class="h-full bg-secondary w-0 transition-all duration-500"></div>
+</div>
+</div>
+<div class="p-3 bg-surface-container-low border border-outline-variant/10 rounded">
+<div class="font-label-mono text-[10px] text-on-surface-variant mb-1">EMA 200</div>
+<div id="ema-200" class="font-data-metric text-lg">—</div>
+<div id="ema-trend-note" class="text-[10px] text-primary-container font-label-mono">—</div>
+</div>
+</div>
+<div class="space-y-2">
+<div class="flex justify-between items-center px-3 py-2 bg-error/5 border-l-2 border-error">
+<span class="font-label-mono text-[11px]">DİRENÇ SEVİYESİ</span>
+<span id="resistance-val" class="font-data-metric text-sm">—</span>
+</div>
+<div class="flex justify-between items-center px-3 py-2 bg-surface-container-highest/20 border-l-2 border-outline">
+<span class="font-label-mono text-[11px]">MEVCUT FİYAT</span>
+<span id="current-price-mid" class="font-data-metric text-sm">—</span>
+</div>
+<div class="flex justify-between items-center px-3 py-2 bg-primary-container/5 border-l-2 border-primary-container">
+<span class="font-label-mono text-[11px]">DESTEK SEVİYESİ</span>
+<span id="support-val" class="font-data-metric text-sm">—</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<section class="glass-panel rounded-lg overflow-hidden">
+<div class="px-panel-padding py-3 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container/30">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant">database</span>
+<h2 class="font-headline-md text-body-lg font-bold tracking-tight uppercase">SON İŞLEM VE ÖĞRENME GEÇMİŞİ (SQLITE)</h2>
+</div>
+<button type="button" id="btn-refresh-trades" class="text-on-surface-variant hover:text-primary-container transition-colors">
+<span class="material-symbols-outlined">refresh</span>
+</button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-high/50 border-b border-outline-variant/20">
+<tr>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">ID</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Yön</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Sembol</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Giriş Fiyatı</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Miktar</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Stop Loss</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Take Profit</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Güven %</th>
+<th class="px-4 py-3 font-label-mono text-[10px] text-on-surface-variant uppercase">Çıkış PnL</th>
+</tr>
+</thead>
+<tbody id="trade-table-body" class="divide-y divide-outline-variant/10">
+<tr><td colspan="9" class="px-4 py-6 text-center text-on-surface-variant font-label-mono text-[12px]">Yükleniyor...</td></tr>
+</tbody>
+</table>
+</div>
+<div class="p-3 bg-surface-container-lowest flex justify-between items-center border-t border-outline-variant/20">
+<span id="trade-count" class="text-[10px] text-on-surface-variant font-label-mono">Görüntülenen: —</span>
+</div>
+</section>
+</main>
+<footer class="fixed bottom-0 w-full h-8 bg-surface-container-lowest border-t border-outline-variant/20 flex items-center justify-between px-margin-desktop z-50">
+<div class="flex items-center gap-4 text-[10px] font-label-mono text-on-surface-variant">
+<div class="flex items-center gap-1.5">
+<span class="w-1.5 h-1.5 rounded-full bg-primary-container animate-pulse"></span>
+<span id="api-status">API CONNECTED</span>
+</div>
+</div>
+<div class="flex items-center gap-4 text-[10px] font-label-mono text-on-surface-variant">
+<span id="current-time">— UTC</span>
+</div>
+</footer>
+<script src="/static/dashboard.js" defer></script>
+</body>
+</html>

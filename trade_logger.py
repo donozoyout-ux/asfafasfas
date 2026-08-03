@@ -130,3 +130,36 @@ def get_ai_learning_context(limit: int = 5) -> str:
         
     memory_text += "\nSELF-LEARNING DIRECTIVE: Learn from the winning setups above. If past trades with similar RSI or trend conditions failed, tighten entry thresholds."
     return memory_text
+
+def get_recent_trades(limit: int = 20) -> list:
+    """Returns recent trades for the web dashboard (newest first)."""
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, symbol, side, entry_price, quantity, sl_price, tp_price,
+               pnl_usdt, ai_confidence, status
+        FROM trades
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "symbol": r[1],
+            "side": r[2],
+            "entry_price": r[3],
+            "quantity": r[4],
+            "sl_price": r[5],
+            "tp_price": r[6],
+            "pnl_usdt": r[7],
+            "ai_confidence": r[8],
+            "status": r[9],
+        }
+        for r in rows
+    ]
