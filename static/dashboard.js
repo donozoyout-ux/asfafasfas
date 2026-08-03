@@ -1,120 +1,191 @@
 function fmtUsd(n) {
     return '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-
 function fmtPct(n) {
     const v = Number(n) || 0;
     return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+function num(n, d) {
+    const v = Number(n);
+    if (isNaN(v)) return d ?? '—';
+    return d !== undefined ? v.toFixed(d) : v;
+}
+
+let lastAction = 'HOLD';
+
+function loadTradingViewChart() {
+    const el = document.getElementById('tradingview-chart');
+    if (!el || window.tvChartLoaded) return;
+    window.tvChartLoaded = true;
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => {
+        if (typeof TradingView === 'undefined') return;
+        new TradingView.widget({
+            container_id: 'tradingview-chart',
+            symbol: 'BINANCE:BTCUSDT',
+            interval: '15',
+            theme: 'dark',
+            style: '1',
+            locale: 'tr',
+            autosize: true,
+            studies: ['RSI@tv-basicstudies', 'MASimple@tv-basicstudies'],
+            enable_publishing: false,
+            hide_side_toolbar: true,
+            withdateranges: false,
+            save_image: false,
+            backgroundColor: '#0a0e14',
+            gridColor: '#1e2836'
+        });
+    };
+    el.appendChild(script);
 }
 
 async function fetchStatus() {
     try {
         const res = await fetch('/api/status');
         const d = await res.json();
-
-        const priceEl = document.getElementById('btc-price');
-        if (priceEl) priceEl.textContent = fmtUsd(d.price);
-
-        const chgEl = document.getElementById('btc-change');
-        if (chgEl) {
-            const chg = d.price_change_24h || 0;
-            chgEl.textContent = fmtPct(chg);
-            chgEl.className = 'text-[12px] font-label-mono font-bold ' + (chg >= 0 ? 'text-primary-container' : 'text-error');
-        }
-
-        const balEl = document.getElementById('usdt-balance');
-        if (balEl) balEl.textContent = fmtUsd(d.balance);
-
-        const pnlEl = document.getElementById('daily-pnl');
-        if (pnlEl) {
-            const pnl = d.daily_pnl || 0;
-            pnlEl.textContent = 'PnL: ' + (pnl >= 0 ? '+' : '') + fmtUsd(pnl);
-            pnlEl.className = 'text-[12px] font-label-mono font-bold ' + (pnl >= 0 ? 'text-primary-container' : 'text-error');
-        }
-
-        const targetLbl = document.getElementById('daily-target-label');
-        const stopLbl = document.getElementById('max-stop-label');
-        if (targetLbl) targetLbl.textContent = 'Target %' + (d.daily_target_pct || 1).toFixed(1);
-        if (stopLbl) stopLbl.textContent = 'Max Stop %' + (d.max_drawdown_pct || 3).toFixed(1);
-
-        const prog = document.getElementById('daily-progress');
-        if (prog) {
-            const pct = Math.min(100, Math.max(0, ((d.daily_pnl_pct || 0) / (d.daily_target_pct || 1)) * 100));
-            prog.style.width = pct + '%';
-        }
-
+        const ind = d.indicators || {};
         const pos = d.position || {};
+        const ai = d.ai_decision || {};
+        const mf = d.multiframe || {};
+
+        const price = num(d.price, 0);
+        const set = (id, txt, cls) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (cls) el.className = 'card-value ' + cls;
+            el.textContent = txt;
+        };
+
+        set('btc-price', fmtUsd(price));
+        const chg = d.price_change_24h || 0;
+        const chgEl = document.getElementById('btc-change');
+        if (chgEl) { chgEl.textContent = fmtPct(chg); chgEl.className = chg >= 0 ? 'up' : 'down'; }
+
+        set('usdt-balance', fmtUsd(d.balance));
+
+        const dpnl = d.daily_pnl || 0;
+        set('daily-pnl', (dpnl >= 0 ? '+' : '') + fmtUsd(dpnl), dpnl >= 0 ? 'up' : 'down');
+        const dpnlPct = document.getElementById('daily-pnl-pct');
+        if (dpnlPct) {
+            dpnlPct.textContent = fmtPct(d.daily_pnl_pct || 0) + ' · Hedef %' + (d.daily_target_pct || 1).toFixed(1);
+            dpnlPct.className = 'card-sub ' + (dpnl >= 0 ? 'up' : 'down');
+        }
+
         const posSide = document.getElementById('pos-side');
         if (posSide) {
-            const side = pos.side && pos.side !== 'FLAT' ? pos.side : 'FLAT';
-            posSide.textContent = side === 'FLAT' ? 'YOK' : side;
-            posSide.className = side === 'LONG' ? 'text-primary-container font-bold' :
-                side === 'SHORT' ? 'text-error font-bold' : 'text-on-surface-variant font-bold';
+            if (pos.side && pos.side !== 'FLAT') {
+                posSide.textContent = pos.side;
+                posSide.className = 'card-value ' + (pos.side === 'LONG' ? 'up' : 'down');
+            } else {
+                posSide.textContent = 'YOK';
+                posSide.className = 'card-value flat';
+            }
         }
         const posDetails = document.getElementById('pos-details');
-        const posPnl = document.getElementById('pos-pnl');
-        if (pos.side && pos.side !== 'FLAT') {
-            if (posDetails) posDetails.textContent = pos.amount + ' BTC @ ' + fmtUsd(pos.entry_price);
-            if (posPnl) {
-                const upnl = pos.unrealized_pnl || 0;
-                posPnl.textContent = (upnl >= 0 ? '+' : '') + fmtUsd(upnl);
-                posPnl.className = 'font-bold font-label-mono text-[11px] ' + (upnl >= 0 ? 'text-primary-container' : 'text-error');
+        if (posDetails) {
+            if (pos.side && pos.side !== 'FLAT') {
+                posDetails.innerHTML = num(pos.amount, 3) + ' BTC @ ' + fmtUsd(pos.entry_price) +
+                    ' · UnPNL <span class="' + (pos.unrealized_pnl >= 0 ? 'up' : 'down') + '">' +
+                    (pos.unrealized_pnl >= 0 ? '+' : '') + fmtUsd(pos.unrealized_pnl) + '</span>';
+            } else {
+                posDetails.textContent = 'Açık pozisyon yok';
             }
-        } else {
-            if (posDetails) posDetails.textContent = 'Açık pozisyon yok';
-            if (posPnl) posPnl.textContent = '$0.00';
         }
 
-        const ai = d.ai_decision || {};
+        const action = (ai.action || 'HOLD').toUpperCase();
+        lastAction = action;
         const aiAction = document.getElementById('ai-action');
-        if (aiAction) aiAction.textContent = (ai.action || 'HOLD').toUpperCase();
+        if (aiAction) {
+            aiAction.textContent = action;
+            aiAction.className = 'ai-action ' + (action === 'LONG' ? 'long' : action === 'SHORT' ? 'short' : 'hold');
+        }
         const aiConf = document.getElementById('ai-confidence');
-        if (aiConf) aiConf.textContent = '%' + (ai.confidence || 0) + ' GÜVEN SEVİYESİ';
+        if (aiConf) aiConf.textContent = '%' + num(ai.confidence, 0) + ' GÜVEN';
+        const confFill = document.getElementById('conf-fill');
+        if (confFill) confFill.style.width = Math.min(100, Math.max(0, ai.confidence || 0)) + '%';
         const aiReason = document.getElementById('ai-reasoning');
         if (aiReason) aiReason.textContent = ai.reasoning || 'Piyasa taranıyor...';
 
-        const ind = d.indicators || {};
         const rsiVal = document.getElementById('rsi-val');
-        if (rsiVal) rsiVal.textContent = ind.rsi_14 ?? '—';
-        const rsiBar = document.getElementById('rsi-bar');
-        if (rsiBar) rsiBar.style.width = Math.min(100, Math.max(0, ind.rsi_14 || 0)) + '%';
+        if (rsiVal) {
+            const rsi = num(ind.rsi_14, 1);
+            rsiVal.textContent = rsi;
+            rsiVal.className = 'ind-val ' + (rsi >= 70 || rsi <= 30 ? (rsi >= 70 ? 'down' : 'up') : '');
+        }
+        const rsiNote = document.getElementById('rsi-note');
+        if (rsiNote) {
+            const s = ind.rsi_status || 'NEUTRAL';
+            rsiNote.textContent = s + (ind.rsi_divergence && ind.rsi_divergence !== 'NONE' ? ' · ' + ind.rsi_divergence : '');
+            rsiNote.className = 'ind-note ' + (s === 'OVERBOUGHT' || s === 'OVERSOLD' ? (s === 'OVERBOUGHT' ? 'down' : 'up') : 'flat');
+        }
         const ema200 = document.getElementById('ema-200');
         if (ema200) ema200.textContent = fmtUsd(ind.ema_200);
         const emaNote = document.getElementById('ema-trend-note');
         if (emaNote) {
             const above = (d.price || 0) > (ind.ema_200 || 0);
-            emaNote.textContent = above ? 'Price above EMA' : 'Price below EMA';
-            emaNote.className = 'text-[10px] font-label-mono ' + (above ? 'text-primary-container' : 'text-error');
+            emaNote.textContent = above ? 'Fiyat EMA üzerinde' : 'Fiyat EMA altında';
+            emaNote.className = 'ind-note ' + (above ? 'up' : 'down');
         }
-        const sup = document.getElementById('support-val');
-        const res = document.getElementById('resistance-val');
-        const mid = document.getElementById('current-price-mid');
-        if (sup) sup.textContent = fmtUsd(ind.support);
-        if (res) res.textContent = fmtUsd(ind.resistance);
-        if (mid) mid.textContent = fmtUsd(d.price);
-
-        const mkt = document.getElementById('market-status');
+        const atrVal = document.getElementById('atr-val');
+        if (atrVal) atrVal.textContent = fmtUsd(ind.atr_14);
+        const mkt = document.getElementById('market-structure');
         if (mkt) {
-            if (ind.crash_alert) {
-                mkt.textContent = ind.crash_message || 'Uyarı';
-                mkt.parentElement.className = 'flex items-center gap-1.5 px-2 py-0.5 bg-error/10 border border-error/30 rounded';
-            } else {
-                mkt.textContent = 'Market Durumu Normal';
-                mkt.parentElement.className = 'flex items-center gap-1.5 px-2 py-0.5 bg-primary-container/10 border border-primary-container/20 rounded';
-            }
+            const ms = ind.market_structure || 'N/A';
+            mkt.textContent = ms.length > 30 ? ms.slice(0, 30) + '...' : ms;
+            mkt.className = 'ind-val ' + (ms.startsWith('BULLISH') ? 'up' : ms.startsWith('BEARISH') ? 'down' : 'flat');
+        }
+        const crashNote = document.getElementById('crash-note');
+        if (crashNote) {
+            crashNote.textContent = ind.crash_alert ? ('⚠️ ' + (ind.crash_message || 'Flash Crash Riski!')) : 'Normal market volatilitesi';
+            crashNote.className = 'ind-note ' + (ind.crash_alert ? 'down' : 'flat');
+        }
+
+        const mfList = document.getElementById('mf-list');
+        if (mfList && Object.keys(mf).length > 0) {
+            mfList.innerHTML = Object.entries(mf).map(([tf, v]) => {
+                const trend = (v.trend || 'N/A').toUpperCase();
+                const icon = trend === 'BULLISH' ? '🟢' : trend === 'BEARISH' ? '🔴' : '⚪';
+                return '<div class="mf-row"><span class="tf">' + tf + ' ' + icon + '</span>' +
+                    '<span class="' + (trend === 'BULLISH' ? 'up' : trend === 'BEARISH' ? 'down' : 'flat') + '">' +
+                    trend + '</span><span style="color:var(--muted);">' + fmtUsd(v.last_close) + '</span></div>';
+            }).join('');
+        }
+
+        const setPair = (id, v, up) => {
+            const el = document.getElementById(id);
+            if (el) { el.textContent = fmtUsd(v); el.className = up !== undefined ? (up ? 'up' : 'down') : ''; }
+        };
+        setPair('resistance-val', ind.resistance, (d.price || 0) < (ind.resistance || 0));
+        setPair('support-val', ind.support, (d.price || 0) > (ind.support || 0));
+        setPair('current-price-mid', d.price);
+        const riskInfo = document.getElementById('risk-info');
+        if (riskInfo) {
+            riskInfo.textContent = '%' + (d.max_drawdown_pct || 0).toFixed(1) + ' stop · Kaldıraç ' + (d.leverage || 1) + 'x';
+            riskInfo.className = 'flat';
         }
 
         const botStatus = document.getElementById('bot-status');
         if (botStatus) {
-            botStatus.textContent = d.status === 'PAUSED' ? 'BOT DURAKLATILDI' : 'RENDER 24/7 CLOUD ACTIVE';
+            if (d.status === 'PAUSED') {
+                botStatus.textContent = 'BOT DURAKLATILDI';
+                botStatus.className = 'status-pill paused';
+            } else {
+                botStatus.textContent = 'RENDER 24/7 AKTİF';
+                botStatus.className = 'status-pill';
+            }
         }
 
         const apiSt = document.getElementById('api-status');
-        if (apiSt) apiSt.textContent = d.last_update ? 'API CONNECTED · ' + d.last_update : 'API CONNECTED';
+        if (apiSt) apiSt.textContent = d.last_update ? 'API BAĞLI · ' + d.last_update : 'API BAĞLI';
     } catch (e) {
         console.error(e);
         const apiSt = document.getElementById('api-status');
         if (apiSt) apiSt.textContent = 'API BAĞLANTI HATASI';
+        const botStatus = document.getElementById('bot-status');
+        if (botStatus) { botStatus.textContent = 'BAĞLANTI YOK'; botStatus.className = 'status-pill error'; }
     }
 }
 
@@ -126,70 +197,86 @@ async function fetchTrades() {
         const countEl = document.getElementById('trade-count');
         if (!tbody) return;
         if (!trades || trades.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-on-surface-variant font-label-mono text-[12px]">Henüz işlem kaydı yok.</td></tr>';
-            if (countEl) countEl.textContent = 'Görüntülenen: 0 kayıt';
+            tbody.innerHTML = '<tr><td colspan="9"><div class="empty">Henüz işlem kaydı yok.</div></td></tr>';
+            if (countEl) countEl.textContent = '0 kayıt';
             return;
         }
         tbody.innerHTML = trades.map(t => {
-            const pnl = t.pnl_usdt;
-            const pnlCell = t.status === 'OPEN'
-                ? '<span class="text-on-surface-variant">AÇIK</span>'
-                : '<span class="' + (pnl >= 0 ? 'text-primary-container' : 'text-error') + '">' +
+            const pnl = t.pnl_usdt || 0;
+            let pnlCell;
+            if (t.status === 'OPEN') {
+                pnlCell = '<span class="badge open">AÇIK</span>';
+            } else {
+                pnlCell = '<span class="' + (pnl >= 0 ? 'up' : 'down') + '">' +
                     (pnl >= 0 ? '+' : '') + fmtUsd(pnl) + '</span>';
-            const sideClass = t.side === 'LONG' ? 'text-primary-container' : 'text-error';
-            return '<tr class="hover:bg-surface-container-highest/20 transition-colors">' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">#' + t.id + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px] ' + sideClass + ' font-bold">' + t.side + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + t.symbol + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + fmtUsd(t.entry_price) + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + t.quantity + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + fmtUsd(t.sl_price) + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + fmtUsd(t.tp_price) + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">%' + t.ai_confidence + '</td>' +
-                '<td class="px-4 py-3 font-label-mono text-[12px]">' + pnlCell + '</td></tr>';
+            }
+            const badge = t.side === 'LONG'
+                ? '<span class="badge long">LONG</span>'
+                : t.side === 'SHORT' ? '<span class="badge short">SHORT</span>' : t.side;
+            return '<tr>' +
+                '<td>#' + t.id + '</td>' +
+                '<td>' + badge + '</td>' +
+                '<td>' + t.symbol + '</td>' +
+                '<td>' + fmtUsd(t.entry_price) + '</td>' +
+                '<td>' + t.quantity + '</td>' +
+                '<td>' + fmtUsd(t.sl_price) + '</td>' +
+                '<td>' + fmtUsd(t.tp_price) + '</td>' +
+                '<td>%' + t.ai_confidence + '</td>' +
+                '<td>' + pnlCell + '</td></tr>';
         }).join('');
-        if (countEl) countEl.textContent = 'Görüntülenen: ' + trades.length + ' kayıt';
+        if (countEl) countEl.textContent = trades.length + ' kayıt';
     } catch (e) {
         console.error(e);
     }
 }
 
 async function triggerAction(action) {
+    const btnMap = { analyze: 'btn-analyze', toggle_pause: 'btn-pause', force_trade: 'btn-test', close: 'btn-close' };
+    const btn = document.getElementById(btnMap[action]);
+    const orig = btn ? btn.textContent : '';
     try {
+        if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
         const res = await fetch('/api/action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action })
         });
         const data = await res.json();
-        if (data.message) alert(data.message);
+        if (data.message) {
+            const toast = document.createElement('div');
+            toast.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);' +
+                'background:var(--panel);border:1px solid var(--green);color:var(--text);' +
+                'padding:10px 18px;border-radius:8px;font-size:13px;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,0.4);';
+            toast.textContent = data.message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
         fetchStatus();
         fetchTrades();
     } catch (e) {
         alert('Hata: ' + e);
+    } finally {
+        if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
     }
 }
 
 function updateTime() {
     const el = document.getElementById('current-time');
     if (!el) return;
-    const now = new Date();
-    el.innerText = now.toISOString().split('T')[1].split('.')[0] + ' UTC';
+    el.innerText = new Date().toISOString().split('T')[1].split('.')[0] + ' UTC';
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    loadTradingViewChart();
     document.getElementById('btn-analyze')?.addEventListener('click', () => triggerAction('analyze'));
     document.getElementById('btn-pause')?.addEventListener('click', () => triggerAction('toggle_pause'));
-    ['btn-test', 'btn-test-mobile', 'btn-quick-exec'].forEach(id => {
-        document.getElementById(id)?.addEventListener('click', () => triggerAction('force_trade'));
-    });
+    document.getElementById('btn-test')?.addEventListener('click', () => triggerAction('force_trade'));
     document.getElementById('btn-close')?.addEventListener('click', () => triggerAction('close'));
-    document.getElementById('btn-refresh-trades')?.addEventListener('click', () => fetchTrades());
 
     fetchStatus();
     fetchTrades();
     setInterval(fetchStatus, 4000);
-    setInterval(fetchTrades, 10000);
+    setInterval(fetchTrades, 12000);
     setInterval(updateTime, 1000);
     updateTime();
 });
