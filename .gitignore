@@ -10,3 +10,4 @@ bot_err.log
 learning_state.json
 .aider*
 archive/
+settings.json
