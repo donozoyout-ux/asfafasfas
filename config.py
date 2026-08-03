@@ -23,6 +23,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Binance Futures Testnet Endpoints
 BINANCE_FUTURES_URL = "https://testnet.binancefuture.com"
 BINANCE_PUBLIC_API_URL = "https://fapi.binance.com"  # Public klines (TradingView source)
+# Fallback public data sources (fapi.binance.com is geo-blocked in some regions/clouds)
+BINANCE_PUBLIC_API_URLS = [
+    "https://fapi.binance.com",
+    "https://testnet.binancefuture.com",
+]
 
 # AI Settings
 GROQ_MODEL = "llama-3.3-70b-versatile"
