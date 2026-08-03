@@ -757,23 +757,45 @@ class BotController:
                         )
                         
                         print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")
-                        self.active_trade_id = trade_logger.log_trade_entry(
-                            symbol=config.SYMBOL,
-                            side=action,
-                            entry_price=trade_params['entry_price'],
-                            quantity=trade_params['quantity'],
-                            sl_price=trade_params['sl_price'],
-                            tp_price=trade_params['tp_price'],
-                            ai_confidence=confidence,
-                            ai_reasoning=reasoning,
-                            indicator_summary=self.latest_summary
-                        )
                         
-                        if not self.dry_run:
+                        if self.dry_run:
+                            # DRY-RUN: simulate success, log the trade
+                            self.active_trade_id = trade_logger.log_trade_entry(
+                                symbol=config.SYMBOL,
+                                side=action,
+                                entry_price=trade_params['entry_price'],
+                                quantity=trade_params['quantity'],
+                                sl_price=trade_params['sl_price'],
+                                tp_price=trade_params['tp_price'],
+                                ai_confidence=confidence,
+                                ai_reasoning=reasoning,
+                                indicator_summary=self.latest_summary
+                            )
+                            self.notifier.send_trade_alert(
+                                action=f"[DRY-RUN] {action}",
+                                price=trade_params['entry_price'],
+                                qty=trade_params['quantity'],
+                                sl=trade_params['sl_price'],
+                                tp=trade_params['tp_price'],
+                                reasoning=reasoning
+                            )
+                        else:
                             order_side = "BUY" if action == "LONG" else "SELL"
                             market_order = self.executor.place_market_order(config.SYMBOL, order_side, trade_params['quantity'])
                             
                             if market_order:
+                                # Only log after the order actually fills
+                                self.active_trade_id = trade_logger.log_trade_entry(
+                                    symbol=config.SYMBOL,
+                                    side=action,
+                                    entry_price=trade_params['entry_price'],
+                                    quantity=trade_params['quantity'],
+                                    sl_price=trade_params['sl_price'],
+                                    tp_price=trade_params['tp_price'],
+                                    ai_confidence=confidence,
+                                    ai_reasoning=reasoning,
+                                    indicator_summary=self.latest_summary
+                                )
                                 time.sleep(1)
                                 self.executor.place_stop_loss_order(config.SYMBOL, action, trade_params['sl_price'], trade_params['quantity'])
                                 self.executor.place_take_profit_order(config.SYMBOL, action, trade_params['tp_price'], trade_params['quantity'])
@@ -786,15 +808,13 @@ class BotController:
                                     tp=trade_params['tp_price'],
                                     reasoning=reasoning
                                 )
-                        else:
-                            self.notifier.send_trade_alert(
-                                action=f"[DRY-RUN] {action}",
-                                price=trade_params['entry_price'],
-                                qty=trade_params['quantity'],
-                                sl=trade_params['sl_price'],
-                                tp=trade_params['tp_price'],
-                                reasoning=reasoning
-                            )
+                            else:
+                                print(f"[ERROR] Market order FAILED for {action} - trade NOT logged.")
+                                self.notifier.send_message(
+                                    f"❌ *İŞLEM BAŞARISIZ:* {action} sinyali geldi ama piyasa emri yerine getirilemedi "
+                                    f"({trade_params['quantity']} {config.SYMBOL} @ ${trade_params['entry_price']:.2f}).\n"
+                                    f"Kasa/leverage yetersiz olabilir."
+                                )
                     else:
                         print("⌛ Decision: HOLD. Waiting for higher conviction setup...")
 

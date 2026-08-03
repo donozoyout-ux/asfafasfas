@@ -73,8 +73,11 @@ class RiskManager:
         # Position Notional Value = Risk_USDT / SL_distance_pct
         notional_val = risk_usdt / (sl_distance_pct + 1e-6)
         
-        # Apply leverage constraint
-        max_notional = account_balance * config.LEVERAGE
+        # Apply leverage constraint with a safety margin so Binance always has
+        # room for maintenance margin + fees (full-leverage usage gets rejected
+        # with "Margin is insufficient"). Max 60% of balance used as margin.
+        margin_utilization = 0.60
+        max_notional = account_balance * config.LEVERAGE * margin_utilization
         position_notional = min(notional_val, max_notional)
         
         # Quantity in contracts (e.g. BTC)
