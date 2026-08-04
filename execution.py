@@ -105,7 +105,9 @@ class BinanceFuturesExecutor:
     def get_open_position(self, symbol: str = config.SYMBOL) -> dict:
         """
         Fetches current open position risk for the specified symbol.
-        Returns position dict if position size > 0.
+        Returns position dict if position size > 0, or a FLAT dict.
+        On API failure returns {"side": "FLAT", "error": True} so callers can
+        distinguish a real FLAT from a transient fetch problem.
         """
         endpoint = "/fapi/v2/positionRisk"
         params = {"symbol": symbol}
@@ -128,10 +130,13 @@ class BinanceFuturesExecutor:
                             "unrealized_pnl": float(pos["unRealizedProfit"]),
                             "liquidation_price": float(pos["liquidationPrice"])
                         }
+                return {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
+            else:
+                print(f"[ERROR] Get position failed {res.status_code}: {res.text}")
+                return {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "error": True}
         except Exception as e:
             print(f"[EXCEPT] Get position exception: {e}")
-            
-        return {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0}
+            return {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "error": True}
 
     def place_market_order(self, symbol: str, side: str, quantity: float) -> dict:
         """Places a Market Order (BUY or SELL)."""

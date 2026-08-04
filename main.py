@@ -58,6 +58,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
             trades = trade_logger.get_recent_trades(limit=20)
             self.wfile.write(json.dumps(trades).encode("utf-8"))
 
+        elif self.path.startswith("/api/reports/"):
+            self.send_response(200)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            report_type = self.path.split("/api/reports/")[-1]
+            if bot_instance:
+                if report_type == "risk":
+                    payload = bot_instance.get_risk_report()
+                elif report_type == "performance":
+                    payload = bot_instance.get_performance_report()
+                elif report_type == "learning":
+                    payload = bot_instance.get_learning_report()
+                else:
+                    payload = {"error": f"Bilinmeyen rapor: {report_type}"}
+            else:
+                payload = {"error": "Bot hazır değil"}
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+
         elif self.path.startswith("/static/"):
             base_dir = os.path.dirname(os.path.abspath(__file__))
             rel = self.path.lstrip("/").replace("/", os.sep)
@@ -586,6 +604,12 @@ class BotController:
             "total_pnl_usdt": round(total_pnl, 2)
         }
 
+    def get_learning_report(self) -> dict:
+        try:
+            return {"report": learning_engine.format_learning_report()}
+        except Exception as e:
+            return {"report": f"Öğrenme raporu alınamadı: {e}"}
+
     def force_test_trade(self):
         """Triggers an instant manual test order on Binance Futures Testnet."""
         current_price = self.latest_summary.get('current_price', 60000.0)
@@ -855,6 +879,12 @@ class BotController:
                 # 2. Check Active Position & Balance
                 if not self.dry_run:
                     self.latest_position = self.executor.get_open_position(config.SYMBOL)
+                    if self.latest_position.get("error"):
+                        # Transient API failure: do NOT treat as position closed,
+                        # just retry next cycle to avoid phantom FLAT + failed orders.
+                        print("[WARN] Position fetch failed (transient) - skipping cycle to avoid false FLAT")
+                        time.sleep(config.CHECK_INTERVAL_SECONDS)
+                        continue
                     self.latest_balance = self.executor.get_account_balance("USDT")
                 else:
                     self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
