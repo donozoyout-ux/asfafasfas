@@ -19,5 +19,7 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: GOOGLE_FORM_URL
+        sync: false
       - key: DATA_DIR
         value: /var/data
