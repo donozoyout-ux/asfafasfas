@@ -23,6 +23,7 @@ import tradingview_service
 import learning_engine
 import news_service
 import settings
+import sheets_exporter
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -908,6 +909,28 @@ class BotController:
                             pnl_usdt=realized["net_pnl"],
                             pnl_pct=0.0
                         )
+                        # Export closed trade to Google Sheets (via Google Form)
+                        try:
+                            if not self.dry_run:
+                                trade_info = trade_logger.get_closed_trades(limit=1)
+                                if trade_info:
+                                    t = trade_info[0]
+                                    sheets_exporter.export_trade({
+                                        "trade_id": t["id"],
+                                        "timestamp": t.get("timestamp", ""),
+                                        "symbol": t["symbol"],
+                                        "side": t["side"],
+                                        "entry_price": t["entry_price"],
+                                        "exit_price": t.get("exit_price", 0),
+                                        "quantity": t["quantity"],
+                                        "pnl_usdt": t.get("pnl_usdt", 0),
+                                        "pnl_pct": t.get("pnl_pct", 0),
+                                        "status": t.get("status", ""),
+                                        "ai_confidence": t.get("ai_confidence", 0),
+                                        "hold_time_min": t.get("hold_time_min", 0),
+                                    })
+                        except Exception as e:
+                            print(f"[WARN] Sheets export failed: {e}")
                         self.active_trade_id = None
                         self.notifier.send_message(
                             f"✅ *İŞLEM KAPANDI!*\n\n"

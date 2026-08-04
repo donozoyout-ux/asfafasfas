@@ -20,6 +20,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# Google Sheets export (via Google Form) - see sheets_exporter.py
+GOOGLE_FORM_URL = os.getenv("GOOGLE_FORM_URL", "")
+
 # Binance Futures Testnet Endpoints
 BINANCE_FUTURES_URL = "https://testnet.binancefuture.com"
 BINANCE_PUBLIC_API_URL = "https://fapi.binance.com"  # Public klines (TradingView source)
