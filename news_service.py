@@ -79,6 +79,14 @@ def _format_date(dt: Optional[datetime]) -> str:
         return ""
 
 
+_FALLBACK_RSS_FEEDS = [
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("CoinTelegraph", "https://cointelegraph.com/rss"),
+    ("Decrypt", "https://decrypt.co/feed"),
+    ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
+]
+
+
 def _fetch_google_news(symbol: str, max_items: int = 12) -> list[dict]:
     """Google News RSS for crypto news (English)."""
     clean = symbol.replace("USDT", "").strip().upper()
@@ -115,6 +123,45 @@ def _fetch_google_news(symbol: str, max_items: int = 12) -> list[dict]:
                 })
                 if len(items) >= max_items:
                     return items
+        except Exception:
+            continue
+    return items
+
+
+def _fetch_fallback_feeds(max_items: int = 12) -> list[dict]:
+    """Crypto-specific RSS feeds as fallback when Google News is unreachable
+    (e.g. Google News RSS is often blocked from server/cloud IPs)."""
+    seen_titles = set()
+    items = []
+
+    for source, url in _FALLBACK_RSS_FEEDS:
+        if len(items) >= max_items:
+            break
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            for item in root.findall(".//item"):
+                title = (item.findtext("title") or "").strip()
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                link = item.findtext("link") or ""
+                pub_date = item.findtext("pubDate") or item.findtext("published") or ""
+                dt = _parse_date(pub_date)
+                items.append({
+                    "title": title,
+                    "link": link,
+                    "source": source,
+                    "date": _format_date(dt),
+                })
+                if len(items) >= max_items:
+                    break
         except Exception:
             continue
     return items
@@ -226,6 +273,9 @@ def get_crypto_news(max_items: int = 15) -> dict:
 
     fng = _fetch_fear_greed_index()
     headlines = _fetch_google_news("BTC", max_items=12)
+    if not headlines:
+        # Google News RSS is often blocked on cloud IPs; use crypto RSS feeds instead.
+        headlines = _fetch_fallback_feeds(max_items=12)
     if fng >= 0 and headlines:
         # Combine: Fear&Greed primary (value 0..100 -> -1..+1), headlines secondary
         fng_score = (fng - 50) / 50.0

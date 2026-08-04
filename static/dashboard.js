@@ -97,6 +97,48 @@ async function fetchStatus() {
             }
         }
 
+        const pd = d.position_detail || {};
+        const actSide = document.getElementById('act-side');
+        const active = pd.side && pd.side !== 'FLAT';
+        if (actSide) {
+            actSide.textContent = active ? pd.side : 'YOK';
+            actSide.className = 'ind-val ' + (active ? (pd.side === 'LONG' ? 'up' : 'down') : 'flat');
+        }
+        const actEntry = document.getElementById('act-entry');
+        if (actEntry) actEntry.textContent = active ? fmtUsd(pd.entry_price) : '—';
+        const actQty = document.getElementById('act-qty');
+        if (actQty) actQty.textContent = active ? num(pd.amount, 3) + ' BTC' : '—';
+        const actPnl = document.getElementById('act-pnl');
+        if (actPnl) {
+            actPnl.textContent = active ? (pd.unrealized_pnl >= 0 ? '+' : '') + fmtUsd(pd.unrealized_pnl) : '—';
+            actPnl.className = 'ind-val ' + (active ? (pd.unrealized_pnl >= 0 ? 'up' : 'down') : 'flat');
+        }
+        const actPnlPct = document.getElementById('act-pnl-pct');
+        if (actPnlPct) {
+            actPnlPct.textContent = active ? fmtPct(pd.pnl_pct) : '—';
+            actPnlPct.className = 'ind-note ' + (active ? (pd.unrealized_pnl >= 0 ? 'up' : 'down') : 'flat');
+        }
+        const actSl = document.getElementById('act-sl');
+        if (actSl) actSl.textContent = active && pd.sl_price ? fmtUsd(pd.sl_price) : '—';
+        const actTp = document.getElementById('act-tp');
+        if (actTp) actTp.textContent = active && pd.tp_price ? fmtUsd(pd.tp_price) : '—';
+
+        const actExpl = document.getElementById('act-explanation');
+        if (actExpl) {
+            if (!active) {
+                actExpl.textContent = 'Açık pozisyon yok. Bot piyasayı taramaya devam ediyor, sinyal bulursa otomatik işlem açar.';
+            } else {
+                const sideTr = pd.side === 'LONG' ? 'LONG (fiyat yükselince kâr)' : 'SHORT (fiyat düşünce kâr)';
+                const pnlAbs = Math.abs(pd.unrealized_pnl || 0);
+                const pnlWord = pd.unrealized_pnl >= 0 ? 'kârdasınız (+' + fmtUsd(pnlAbs) + ')' : 'zarardasınız (-' + fmtUsd(pnlAbs) + ')';
+                let liqTxt = '';
+                if (pd.liquidation_price) liqTxt = ' Fiyat $' + num(pd.liquidation_price, 0) + ' olursa pozisyon zorla kapanır (likidasyon).';
+                let slTxt = pd.sl_price ? ' Fiyat $' + num(pd.sl_price, 0) + ' olursa zararı sınırlamak için otomatik kapanır.' : '';
+                let tpTxt = pd.tp_price ? ' Fiyat $' + num(pd.tp_price, 0) + ' olursa kâr için otomatik kapanır.' : '';
+                actExpl.innerHTML = 'Bu bir ' + sideTr + ' pozisyonu. Şu an ' + pnlWord + ' (giriş ' + fmtUsd(pd.entry_price) + ').' + slTxt + tpTxt + liqTxt;
+            }
+        }
+
         const action = (ai.action || 'HOLD').toUpperCase();
         lastAction = action;
         const aiAction = document.getElementById('ai-action');

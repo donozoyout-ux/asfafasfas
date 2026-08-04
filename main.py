@@ -640,6 +640,27 @@ class BotController:
     def get_dashboard_state(self) -> dict:
         daily_pnl = round(self.latest_balance - self.daily_start_balance, 2)
         daily_pnl_pct = round((daily_pnl / (self.daily_start_balance + 1e-5)) * 100, 2)
+        pos = self.latest_position
+        # SL/TP seviyelerini aktif pozisyondan türet (DB kaydı / algo emirleri)
+        sl_price = None
+        tp_price = None
+        if pos.get("side") != "FLAT":
+            try:
+                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                for o in open_algo:
+                    if o.get("orderType") == "STOP_MARKET":
+                        sl_price = float(o.get("triggerPrice") or 0) or None
+                    elif o.get("orderType") == "TAKE_PROFIT_MARKET":
+                        tp_price = float(o.get("triggerPrice") or 0) or None
+            except Exception:
+                pass
+        pnl_usdt = pos.get("unrealized_pnl", 0) or 0
+        pnl_pct = 0.0
+        if pos.get("entry_price"):
+            if pos.get("side") == "LONG":
+                pnl_pct = (self.latest_summary.get("current_price", 0) - pos["entry_price"]) / pos["entry_price"] * 100
+            elif pos.get("side") == "SHORT":
+                pnl_pct = (pos["entry_price"] - self.latest_summary.get("current_price", 0)) / pos["entry_price"] * 100
         return {
             "status": "PAUSED" if self.paused else "RUNNING_24_7",
             "dry_run": self.dry_run,
@@ -653,7 +674,17 @@ class BotController:
             "daily_pnl_pct": daily_pnl_pct,
             "daily_target_pct": config.DAILY_TARGET_PROFIT_PCT * 100,
             "max_drawdown_pct": config.MAX_DAILY_DRAWDOWN_PCT * 100,
-            "position": self.latest_position,
+            "position": pos,
+            "position_detail": {
+                "side": pos.get("side", "FLAT"),
+                "entry_price": pos.get("entry_price", 0),
+                "amount": pos.get("amount", 0),
+                "unrealized_pnl": round(pnl_usdt, 2),
+                "pnl_pct": round(pnl_pct, 2),
+                "sl_price": sl_price,
+                "tp_price": tp_price,
+                "liquidation_price": pos.get("liquidation_price", 0)
+            },
             "indicators": {
                 "rsi_14": self.latest_summary.get("rsi_14", 0),
                 "rsi_status": self.latest_summary.get("rsi_status", "N/A"),

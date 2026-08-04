@@ -444,6 +444,45 @@ tr:hover td { background: rgba(255,255,255,0.02); }
         </div>
     </div>
 
+    <div class="main-grid">
+        <div class="panel">
+            <div class="panel-head">
+                <div class="panel-title"><span class="dot" style="background:var(--green);"></span>Aktif İşlem</div>
+                <span style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;">Canlı pozisyon</span>
+            </div>
+            <div class="ind-grid" style="grid-template-columns:1fr 1fr 1fr;">
+                <div class="ind-item">
+                    <div class="ind-label">Yön</div>
+                    <div class="ind-val" id="act-side">YOK</div>
+                </div>
+                <div class="ind-item">
+                    <div class="ind-label">Giriş Fiyatı</div>
+                    <div class="ind-val" id="act-entry">—</div>
+                </div>
+                <div class="ind-item">
+                    <div class="ind-label">Miktar</div>
+                    <div class="ind-val" id="act-qty">—</div>
+                </div>
+                <div class="ind-item">
+                    <div class="ind-label">Kâr / Zarar</div>
+                    <div class="ind-val" id="act-pnl">—</div>
+                    <div class="ind-note" id="act-pnl-pct">—</div>
+                </div>
+                <div class="ind-item">
+                    <div class="ind-label">Stop-Loss (SL)</div>
+                    <div class="ind-val" id="act-sl">—</div>
+                    <div class="ind-note">Zararı sınırlar</div>
+                </div>
+                <div class="ind-item">
+                    <div class="ind-label">Take-Profit (TP)</div>
+                    <div class="ind-val" id="act-tp">—</div>
+                    <div class="ind-note">Kârı kilitle</div>
+                </div>
+            </div>
+            <div style="padding:0 18px 16px;font-size:12px;line-height:1.6;color:var(--muted);" id="act-explanation">Açık pozisyon yok.</div>
+        </div>
+    </div>
+
     <div class="panel">
         <div class="panel-head">
             <div class="panel-title"><span class="dot" style="background:var(--green);"></span>Son İşlemler</div>
