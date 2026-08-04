@@ -884,6 +884,36 @@ class BotController:
                     pnl = self.latest_position['unrealized_pnl']
                     pnl_color = "🟢" if pnl >= 0 else "🔴"
                     print(f"⚡ ACTIVE POSITION: {self.latest_position['side']} {self.latest_position['amount']} {config.SYMBOL} @ ${self.latest_position['entry_price']:.2f} | UnPNL: {pnl_color} ${pnl:+.2f}")
+
+                    # Auto-protect: if position is open but no SL/TP algo orders exist,
+                    # let the bot compute adaptive SL/TP itself and place them.
+                    if not self.dry_run:
+                        try:
+                            open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                            has_sl = any(o.get("orderType") == "STOP_MARKET" for o in open_algo)
+                            has_tp = any(o.get("orderType") == "TAKE_PROFIT_MARKET" for o in open_algo)
+                            if not has_sl or not has_tp:
+                                import risk_manager as risk_module
+                                current = self.latest_summary["current_price"]
+                                qty = self.latest_position["amount"]
+                                adaptive = risk_module.adaptive_parameters(
+                                    atr_14=self.latest_summary["atr_14"],
+                                    entry_price=current,
+                                    base_leverage=config.LEVERAGE
+                                )
+                                if self.latest_position["side"] == "LONG":
+                                    sl_price = current - (self.latest_summary["atr_14"] * adaptive["sl_multiplier"])
+                                    tp_price = current + (self.latest_summary["atr_14"] * adaptive["tp_multiplier"])
+                                else:
+                                    sl_price = current + (self.latest_summary["atr_14"] * adaptive["sl_multiplier"])
+                                    tp_price = current - (self.latest_summary["atr_14"] * adaptive["tp_multiplier"])
+                                print(f"🛡️  No SL/TP on open position -> bot placing SL ${sl_price:.2f} / TP ${tp_price:.2f} (adaptive {adaptive['sl_multiplier']}x/{adaptive['tp_multiplier']}x ATR)")
+                                if not has_sl:
+                                    self.executor.place_stop_loss_order(config.SYMBOL, self.latest_position["side"], sl_price, qty)
+                                if not has_tp:
+                                    self.executor.place_take_profit_order(config.SYMBOL, self.latest_position["side"], tp_price, qty)
+                        except Exception as e:
+                            print(f"[WARN] Auto SL/TP placement failed: {e}")
                 else:
                     if not can_trade:
                         print(f"⏸️  Trading paused by Risk Manager: {limit_msg}")

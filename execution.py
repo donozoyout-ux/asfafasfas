@@ -157,64 +157,67 @@ class BinanceFuturesExecutor:
             print(f"[EXCEPT] Market order exception: {e}")
         return {}
 
+    def _place_algo_order(self, params: dict) -> dict:
+        """Places a conditional (algo) order via /fapi/v1/algoOrder.
+
+        Since 2025-12-09 Binance migrated conditional order types
+        (STOP_MARKET, TAKE_PROFIT_MARKET, STOP, TAKE_PROFIT, TRAILING_STOP_MARKET)
+        from /fapi/v1/order to the Algo Order endpoint. The legacy endpoint now
+        returns error -4120 for these types.
+        """
+        endpoint = "/fapi/v1/algoOrder"
+        params = dict(params)
+        params.setdefault("algoType", "CONDITIONAL")
+        params.setdefault("workingType", "MARK_PRICE")
+        params.setdefault("reduceOnly", "true")
+        params.setdefault("positionSide", "BOTH")
+        query = self._sign_request(params)
+        url = f"{self.base_url}{endpoint}?{query}"
+
+        try:
+            res = requests.post(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                return data
+            else:
+                print(f"[WARN] Algo order failed {res.status_code}: {res.text}")
+                return {}
+        except Exception as e:
+            print(f"[EXCEPT] Algo order exception: {e}")
+            return {}
+
     def place_stop_loss_order(self, symbol: str, position_side: str, stop_price: float, quantity: float) -> dict:
-        """Places a STOP_MARKET order to protect position."""
-        endpoint = "/fapi/v1/order"
+        """Places a STOP_MARKET order to protect position (Algo Order API)."""
         order_side = "SELL" if position_side.upper() == "LONG" else "BUY"
         params = {
             "symbol": symbol,
             "side": order_side,
             "type": "STOP_MARKET",
-            "stopPrice": round(stop_price, 2),
-            "quantity": quantity,
-            "workingType": "MARK_PRICE"
+            "triggerPrice": round(stop_price, 2),
+            "quantity": quantity
         }
-        query = self._sign_request(params)
-        url = f"{self.base_url}{endpoint}?{query}"
-
-        try:
-            res = requests.post(url, headers=self.headers, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                print(f"[SUCCESS] Stop Loss order set at ${stop_price:.2f}")
-                return data
-            else:
-                print(f"[WARN] Stop Loss order failed {res.status_code}: {res.text}")
-                return {}
-        except Exception as e:
-            print(f"[EXCEPT] Stop Loss order exception: {e}")
-            return {}
+        data = self._place_algo_order(params)
+        if data:
+            print(f"[SUCCESS] Stop Loss order set at ${stop_price:.2f} (algoId: {data.get('algoId')})")
+        return data
 
     def place_take_profit_order(self, symbol: str, position_side: str, tp_price: float, quantity: float) -> dict:
-        """Places a TAKE_PROFIT_MARKET order to lock in profit."""
-        endpoint = "/fapi/v1/order"
+        """Places a TAKE_PROFIT_MARKET order to lock in profit (Algo Order API)."""
         order_side = "SELL" if position_side.upper() == "LONG" else "BUY"
         params = {
             "symbol": symbol,
             "side": order_side,
             "type": "TAKE_PROFIT_MARKET",
-            "stopPrice": round(tp_price, 2),
-            "quantity": quantity,
-            "workingType": "MARK_PRICE"
+            "triggerPrice": round(tp_price, 2),
+            "quantity": quantity
         }
-        query = self._sign_request(params)
-        url = f"{self.base_url}{endpoint}?{query}"
-
-        try:
-            res = requests.post(url, headers=self.headers, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                print(f"[SUCCESS] Take Profit order set at ${tp_price:.2f}")
-                return data
-            else:
-                print(f"[WARN] Take Profit order failed {res.status_code}: {res.text}")
-                return {}
-        except Exception as e:
-            print(f"[EXCEPT] Take Profit order exception: {e}")
-            return {}
+        data = self._place_algo_order(params)
+        if data:
+            print(f"[SUCCESS] Take Profit order set at ${tp_price:.2f} (algoId: {data.get('algoId')})")
+        return data
 
     def cancel_all_open_orders(self, symbol: str = config.SYMBOL):
-        """Cancels all open orders for symbol."""
+        """Cancels all open standard orders for symbol."""
         endpoint = "/fapi/v1/allOpenOrders"
         params = {"symbol": symbol}
         query = self._sign_request(params)
@@ -227,6 +230,46 @@ class BinanceFuturesExecutor:
         except Exception as e:
             print(f"[EXCEPT] Cancel orders exception: {e}")
 
+    def cancel_all_open_algo_orders(self, symbol: str = config.SYMBOL):
+        """Cancels all open algo (conditional) orders for symbol."""
+        open_algo = self.get_open_algo_orders(symbol)
+        if not open_algo:
+            print(f"[INFO] No open algo orders to cancel for {symbol}")
+            return
+        for order in open_algo:
+            algo_id = order.get("algoId") or order.get("id")
+            if not algo_id:
+                continue
+            endpoint = "/fapi/v1/algoOrder"
+            params = {"symbol": symbol, "algoId": algo_id}
+            query = self._sign_request(params)
+            url = f"{self.base_url}{endpoint}?{query}"
+            try:
+                res = requests.delete(url, headers=self.headers, timeout=10)
+                if res.status_code == 200:
+                    print(f"[SUCCESS] Cancelled algo order {algo_id}")
+                else:
+                    print(f"[WARN] Cancel algo order {algo_id} failed {res.status_code}: {res.text}")
+            except Exception as e:
+                print(f"[EXCEPT] Cancel algo order exception: {e}")
+
+    def get_open_algo_orders(self, symbol: str = config.SYMBOL) -> list:
+        """Lists open algo (conditional) orders for symbol."""
+        endpoint = "/fapi/v1/openAlgoOrders"
+        params = {"symbol": symbol}
+        query = self._sign_request(params)
+        url = f"{self.base_url}{endpoint}?{query}"
+
+        try:
+            res = requests.get(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                return res.json()
+            else:
+                print(f"[WARN] Get algo orders failed {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[EXCEPT] Get algo orders exception: {e}")
+        return []
+
     def close_position(self, symbol: str = config.SYMBOL) -> bool:
         """Closes any active position at Market Price."""
         pos = self.get_open_position(symbol)
@@ -235,6 +278,7 @@ class BinanceFuturesExecutor:
             return True
             
         self.cancel_all_open_orders(symbol)
+        self.cancel_all_open_algo_orders(symbol)
         order_side = "SELL" if pos["side"] == "LONG" else "BUY"
         res = self.place_market_order(symbol, order_side, pos["amount"])
         return bool(res)
