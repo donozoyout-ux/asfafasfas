@@ -1,10 +1,21 @@
 import json
+import re
+import time
 import requests
 import config
 import trade_logger
 import learning_engine
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# Rate-limit throttle: at most one AI call every N seconds to avoid burning the
+# daily Groq token budget (100K/day on free tier). A 429 (rate limit) forces a
+# long cooldown so the bot doesn't keep hammering a saturated API.
+MIN_CALL_INTERVAL_SECONDS = 60
+RATE_LIMIT_COOLDOWN_SECONDS = 1800  # 30 min after a 429
+
+_last_call_time = 0.0
+_cooldown_until = 0.0
 
 SYSTEM_PROMPT = """You are a World-Class Master Cryptocurrency Quantitative Trader managing an automated Futures & Portfolio strategy on Binance, focused strictly on BITCOIN (BTC).
 Your primary directive is to achieve consistent daily capital growth of 0.5% to 1.0% with STRICT risk management, protecting against sudden dumps, and achieving long-term profitability.
@@ -50,6 +61,16 @@ def analyze_market_with_ai(indicator_summary: dict, ticker_24h: dict, multiframe
     Sends technical data + TradingView TA ratings + support/resistance + market structure + past trade performance memory
     to Groq Llama-3.3-70b and receives self-adapting trading signal JSON.
     """
+    global _last_call_time, _cooldown_until
+
+    # Throttle: respect rate-limit cooldown and min call interval.
+    now = time.time()
+    if now < _cooldown_until:
+        return {"action": "HOLD", "confidence": 0, "reasoning": "Groq rate-limit cooldown"}
+    if now - _last_call_time < MIN_CALL_INTERVAL_SECONDS:
+        return {"action": "HOLD", "confidence": 0, "reasoning": "Groq call throttled (rate-limit protection)"}
+    _last_call_time = now
+
     learning_memory = learning_engine.build_learning_context(limit=6)
     mf_str = json.dumps(multiframe_data) if multiframe_data else "15m: ACTIVE, 1h: BULLISH, 4h: BULLISH"
     tv_str = json.dumps(tradingview_data) if tradingview_data else "TradingView: N/A"
@@ -173,6 +194,18 @@ Evaluate if there is a high-probability trade opportunity to reach our 0.5%-1% d
             return ai_data
         else:
             print(f"[ERROR] Groq API returned {res.status_code}: {res.text}")
+            if res.status_code == 429:
+                # Use the reset time from Groq's message if present ("try again in 2m24.288s"),
+                # otherwise fall back to a long fixed cooldown.
+                m = re.search(r"try again in ([\d.]+)m([\d.]+)?s", res.text)
+                if m:
+                    minutes = float(m.group(1))
+                    seconds = float(m.group(2)) if m.group(2) else 0.0
+                    _cooldown_until = time.time() + minutes * 60 + seconds + 60
+                    print(f"[RATE-LIMIT] AI throttled for {minutes:.0f}m{seconds:.0f}s + 60s buffer")
+                else:
+                    _cooldown_until = time.time() + RATE_LIMIT_COOLDOWN_SECONDS
+                    print(f"[RATE-LIMIT] AI throttled for {RATE_LIMIT_COOLDOWN_SECONDS}s")
             return {"action": "HOLD", "confidence": 0, "reasoning": f"Groq HTTP Error {res.status_code}"}
     except json.JSONDecodeError as e:
         print(f"[ERROR] Failed to parse JSON from Groq output: {e}")
