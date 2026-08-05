@@ -226,20 +226,33 @@ def is_rate_limited(result: dict) -> bool:
 
 def get_fallback_signal(indicator_summary: dict, tradingview_data: dict = None,
                         news_data: dict = None, derivatives_data: dict = None,
+                        multiframe_data: dict = None,
                         current_position: str = "FLAT") -> dict:
     """Rule-based trading signal used when Groq is rate-limited.
 
-    Combines TradingView TA consensus across timeframes, RSI, news sentiment
-    and funding rate into a LONG / SHORT / HOLD decision with a confidence score.
+    Combines TradingView TA consensus across timeframes, multi-timeframe EMA
+    trend, RSI, news sentiment and funding rate into a LONG / SHORT / HOLD
+    decision with a confidence score.
     """
     action = "HOLD"
     confidence = 0
     score = 0  # positive = long bias, negative = short bias
     reasons = []
 
+    # Multi-timeframe EMA trend (1h and 4h macro weigh more than 15m)
+    mf = multiframe_data or {}
+    for tf, weight in (("4h", 1.0), ("1h", 0.8), ("15m", 0.5)):
+        entry = mf.get(tf) or {}
+        trend = str(entry.get("trend", "")).upper()
+        if trend == "BULLISH":
+            score += weight
+            reasons.append(f"{tf} bullish")
+        elif trend == "BEARISH":
+            score -= weight
+            reasons.append(f"{tf} bearish")
+
     tv = tradingview_data or {}
     consensus = str(tv.get("consensus", "")).upper()
-    mf = tv.get("multiframe") or {}
     # consensus can look like "15m: BUY | 1h: BUY | 4h: BUY"
     tf_scores = []
     for part in consensus.split("|"):
@@ -257,7 +270,7 @@ def get_fallback_signal(indicator_summary: dict, tradingview_data: dict = None,
             tf_scores.append(0)
     if tf_scores:
         avg_tf = sum(tf_scores) / len(tf_scores)
-        score += avg_tf * 2.0
+        score += avg_tf * 1.5
         if avg_tf >= 0.5:
             reasons.append("TradingView multi-TF BUY")
         elif avg_tf <= -0.5:

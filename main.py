@@ -1024,6 +1024,7 @@ class BotController:
                             tradingview_data=self.latest_tradingview,
                             news_data=self.latest_news,
                             derivatives_data=self.latest_derivatives,
+                            multiframe_data=self.multiframe_summary,
                             current_position=self.latest_position["side"],
                         )
                     self.latest_ai_decision = ai_decision
