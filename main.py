@@ -1015,6 +1015,17 @@ class BotController:
                         news_data=self.latest_news,
                         derivatives_data=self.latest_derivatives
                     )
+                    # If Groq is rate-limited, fall back to a rule-based signal so the
+                    # bot keeps trading instead of sitting idle the whole day.
+                    if ai_brain.is_rate_limited(ai_decision):
+                        print("[FALLBACK] Groq AI rate-limited -> using rule-based signal")
+                        ai_decision = ai_brain.get_fallback_signal(
+                            self.latest_summary,
+                            tradingview_data=self.latest_tradingview,
+                            news_data=self.latest_news,
+                            derivatives_data=self.latest_derivatives,
+                            current_position=self.latest_position["side"],
+                        )
                     self.latest_ai_decision = ai_decision
                     
                     action = ai_decision.get("action", "HOLD").upper()
@@ -1035,6 +1046,14 @@ class BotController:
                         current_threshold = adaptation["confidence_threshold"]
                     except Exception:
                         current_threshold = config.CONFIDENCE_THRESHOLD
+
+                    # When running on the rule-based fallback (Groq rate-limited),
+                    # use a lower, fixed threshold. The learning engine raises its
+                    # threshold after a losing streak, which would otherwise lock
+                    # the fallback out of trading entirely (e.g. 66 < 75 forever).
+                    if ai_decision.get("fallback"):
+                        current_threshold = min(current_threshold, config.CONFIDENCE_THRESHOLD)
+                        print(f"🔧 Fallback mode -> threshold lowered to {current_threshold}%")
                     
                     # 4. Execute Trade if High Conviction (adaptive threshold)
                     if action in ["LONG", "SHORT"] and confidence >= current_threshold:

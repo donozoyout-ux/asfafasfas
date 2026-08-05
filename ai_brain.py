@@ -214,3 +214,106 @@ Evaluate if there is a high-probability trade opportunity to reach our 0.5%-1% d
         print(f"[EXCEPT] Groq AI analysis failed: {e}")
         return {"action": "HOLD", "confidence": 0, "reasoning": str(e)}
 
+
+def is_rate_limited(result: dict) -> bool:
+    """True if the AI result came from a rate-limit/cooldown failure."""
+    reason = str(result.get("reasoning", ""))
+    return result.get("action") == "HOLD" and any(
+        token in reason.lower()
+        for token in ("rate-limit", "throttled", "429", "http error")
+    )
+
+
+def get_fallback_signal(indicator_summary: dict, tradingview_data: dict = None,
+                        news_data: dict = None, derivatives_data: dict = None,
+                        current_position: str = "FLAT") -> dict:
+    """Rule-based trading signal used when Groq is rate-limited.
+
+    Combines TradingView TA consensus across timeframes, RSI, news sentiment
+    and funding rate into a LONG / SHORT / HOLD decision with a confidence score.
+    """
+    action = "HOLD"
+    confidence = 0
+    score = 0  # positive = long bias, negative = short bias
+    reasons = []
+
+    tv = tradingview_data or {}
+    consensus = str(tv.get("consensus", "")).upper()
+    mf = tv.get("multiframe") or {}
+    # consensus can look like "15m: BUY | 1h: BUY | 4h: BUY"
+    tf_scores = []
+    for part in consensus.split("|"):
+        p = part.strip()
+        if ":" in p:
+            _, val = p.split(":", 1)
+            val = val.strip().upper()
+        else:
+            val = p
+        if val in ("STRONG_BUY", "BUY"):
+            tf_scores.append(1 if "STRONG" in val else 0.5)
+        elif val in ("STRONG_SELL", "SELL"):
+            tf_scores.append(-1 if "STRONG" in val else -0.5)
+        else:
+            tf_scores.append(0)
+    if tf_scores:
+        avg_tf = sum(tf_scores) / len(tf_scores)
+        score += avg_tf * 2.0
+        if avg_tf >= 0.5:
+            reasons.append("TradingView multi-TF BUY")
+        elif avg_tf <= -0.5:
+            reasons.append("TradingView multi-TF SELL")
+
+    rsi = indicator_summary.get("rsi_14")
+    if rsi is not None:
+        if rsi <= 30:
+            score += 1.0
+            reasons.append(f"RSI {rsi:.0f} oversold")
+        elif rsi >= 70:
+            score -= 1.0
+            reasons.append(f"RSI {rsi:.0f} overbought")
+        elif rsi < 40:
+            score += 0.3
+        elif rsi > 60:
+            score -= 0.3
+
+    # News sentiment guard
+    if news_data:
+        sent = float(news_data.get("sentiment_score", 0.0) or 0.0)
+        if sent <= -0.5:
+            score -= 1.0
+            reasons.append("BEARISH news veto")
+        elif sent >= 0.5:
+            score += 0.5
+            reasons.append("BULLISH news")
+
+    # Funding extreme guard
+    if derivatives_data:
+        funding_pct = float(derivatives_data.get("funding_rate_pct", 0.0) or 0.0)
+        if funding_pct >= 0.05:
+            score -= 0.8
+            reasons.append("extreme long funding")
+        elif funding_pct <= -0.05:
+            score += 0.8
+            reasons.append("extreme short funding")
+
+    if score >= 1.0:
+        action = "LONG"
+    elif score <= -1.0:
+        action = "SHORT"
+    confidence = min(int(abs(score) * 50), 100)
+    confidence = max(confidence, 10)  # at least show a signal exists
+
+    if not reasons:
+        reasons.append("No strong setup")
+
+    reasoning = (f"[Fallback] {' | '.join(reasons)} (score {score:+.1f}). "
+                 f"Groq AI rate-limited, using rule-based signal.")
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "sl_multiplier_atr": config.ATR_SL_MULTIPLIER,
+        "tp_multiplier_atr": config.ATR_TP_MULTIPLIER,
+        "fallback": True,
+    }
+
