@@ -1086,7 +1086,6 @@ class BotController:
                         
                         if self.dry_run:
                             # DRY-RUN: simulate success, log the trade
-                            risk_mgr.record_trade()
                             self.active_trade_id = trade_logger.log_trade_entry(
                                 symbol=config.SYMBOL,
                                 side=action,
@@ -1116,7 +1115,6 @@ class BotController:
                             
                             if market_order:
                                 # Only log after the order actually fills
-                                risk_mgr.record_trade()
                                 self.active_trade_id = trade_logger.log_trade_entry(
                                     symbol=config.SYMBOL,
                                     side=action,

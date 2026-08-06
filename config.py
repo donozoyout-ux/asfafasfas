@@ -46,7 +46,6 @@ RISK_PER_TRADE_PCT = 0.01       # 1.0% account equity risk per trade (conservati
 DAILY_TARGET_PROFIT_PCT = 0.02  # 2.0% daily growth goal
 MAX_DAILY_DRAWDOWN_PCT = 0.03   # 3.0% max daily drawdown limit (safety circuit breaker)
 CONFIDENCE_THRESHOLD = 65       # AI confidence threshold (%) to execute trades (conservative)
-MAX_DAILY_TRADES = 5            # Hard cap on number of new trades per day (prevents over-trading)
 
 # Binance Futures Fee Rates (Standard Taker Fee = 0.05%)
 BINANCE_FUTURES_TAKER_FEE = 0.0005  # 0.05% per order

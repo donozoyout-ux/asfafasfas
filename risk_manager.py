@@ -8,29 +8,23 @@ class RiskManager:
     def __init__(self, initial_balance: float = 5000.0):
         self.initial_daily_balance = initial_balance
         self.current_daily_profit_pct = 0.0
-        self.trades_today = 0
         
     def reset_daily_stats(self, current_balance: float):
         """Resets starting balance at the start of a new trading day."""
         self.initial_daily_balance = current_balance
         self.current_daily_profit_pct = 0.0
-        self.trades_today = 0
 
     def check_daily_limits(self, current_balance: float) -> tuple[bool, str]:
         """
-        Checks if daily target profit (0.5%-1.0%), max daily drawdown (-3%), or
-        max daily trade count has been hit.
+        Checks if daily target profit or max daily drawdown has been hit.
         Returns (can_trade: bool, reason: str).
+        No hard trade-count cap — that would miss strong trending days.
         """
         if self.initial_daily_balance <= 0:
             return True, "Valid balance"
             
         profit_amount = current_balance - self.initial_daily_balance
         self.current_daily_profit_pct = profit_amount / self.initial_daily_balance
-
-        max_trades = getattr(config, "MAX_DAILY_TRADES", 5)
-        if self.trades_today >= max_trades:
-            return False, f"Max daily trades reached ({self.trades_today}/{max_trades}). Stopping new entries."
 
         if self.current_daily_profit_pct >= config.DAILY_TARGET_PROFIT_PCT:
             return False, f"Daily target profit achieved (+{self.current_daily_profit_pct*100:.2f}%). Capital preserved."
@@ -39,10 +33,6 @@ class RiskManager:
             return False, f"Max daily drawdown hit ({self.current_daily_profit_pct*100:.2f}%). Circuit breaker active."
             
         return True, f"Trading active (Daily PnL: {self.current_daily_profit_pct*100:+.2f}%)"
-
-    def record_trade(self):
-        """Increments today's trade counter after a new position is opened."""
-        self.trades_today += 1
 
     def calculate_position_parameters(
         self,
