@@ -309,10 +309,30 @@ def get_fallback_signal(indicator_summary: dict, tradingview_data: dict = None,
             score += 0.8
             reasons.append("extreme short funding")
 
+    # Compute raw action from score
     if score >= 1.0:
         action = "LONG"
     elif score <= -1.0:
         action = "SHORT"
+
+    # Support / Resistance filter: do NOT buy into strong resistance, do NOT
+    # short directly into major support (bad risk/reward).
+    price = indicator_summary.get("current_price")
+    resistance = indicator_summary.get("resistance_level")
+    support = indicator_summary.get("support_level")
+    sr_veto = False
+    if price and resistance and support:
+        dist_to_res = abs(price - resistance) / price * 100 if price else 999
+        dist_to_sup = abs(price - support) / price * 100 if price else 999
+        if action == "LONG" and dist_to_res < 0.35:
+            action = "HOLD"
+            sr_veto = True
+            reasons.append(f"near resistance ${resistance:.0f} (LONG veto)")
+        elif action == "SHORT" and dist_to_sup < 0.35:
+            action = "HOLD"
+            sr_veto = True
+            reasons.append(f"near support ${support:.0f} (SHORT veto)")
+
     confidence = min(int(abs(score) * 50), 100)
     confidence = max(confidence, 10)  # at least show a signal exists
 

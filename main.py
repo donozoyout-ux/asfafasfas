@@ -838,9 +838,10 @@ class BotController:
                                 trade_id=t["id"],
                                 exit_price=self.latest_summary.get("current_price", t["entry_price"]),
                                 pnl_usdt=t["entry_price"] * 0.0,
-                                pnl_pct=0.0
+                                pnl_pct=0.0,
+                                status="EXPIRED"
                             )
-                            print(f"[ADOPT] Ölü OPEN kayıt #{t['id']} kapatıldı (Binance pozisyonu FLAT)")
+                            print(f"[ADOPT] Ölü OPEN kayıt #{t['id']} kapatıldı (Binance pozisyonu FLAT) -> EXPIRED")
                     except Exception as e2:
                         print(f"[WARN] Stale open trade cleanup failed: {e2}")
         except Exception as e:
@@ -1085,6 +1086,7 @@ class BotController:
                         
                         if self.dry_run:
                             # DRY-RUN: simulate success, log the trade
+                            risk_mgr.record_trade()
                             self.active_trade_id = trade_logger.log_trade_entry(
                                 symbol=config.SYMBOL,
                                 side=action,
@@ -1114,6 +1116,7 @@ class BotController:
                             
                             if market_order:
                                 # Only log after the order actually fills
+                                risk_mgr.record_trade()
                                 self.active_trade_id = trade_logger.log_trade_entry(
                                     symbol=config.SYMBOL,
                                     side=action,

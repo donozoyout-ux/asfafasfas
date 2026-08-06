@@ -97,12 +97,18 @@ def log_trade_entry(symbol: str, side: str, entry_price: float, quantity: float,
     print(f"[DB] Trade logged (ID #{trade_id}): {side} {quantity} {symbol} @ ${entry_price:.2f}")
     return trade_id
 
-def update_trade_exit(trade_id: int, exit_price: float, pnl_usdt: float, pnl_pct: float):
-    """Updates a closed trade with exit price and calculated PnL."""
+def update_trade_exit(trade_id: int, exit_price: float, pnl_usdt: float, pnl_pct: float, status: str = None):
+    """Updates a closed trade with exit price and calculated PnL.
+
+    status: optional override. Defaults to 'WIN'/'LOSS' based on pnl_usdt.
+    Pass 'EXPIRED' for stale trades that were never really closed (0 PnL),
+    so they don't pollute the win-rate stats as losses.
+    """
     init_db()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    status = "WIN" if pnl_usdt > 0 else "LOSS"
+    if status is None:
+        status = "WIN" if pnl_usdt > 0 else "LOSS"
     
     # Compute hold time in minutes
     hold_min = 0
@@ -128,9 +134,9 @@ def get_performance_summary() -> dict:
     """Returns overall trade performance statistics and win rate."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM trades WHERE status IN ('WIN', 'LOSS')", conn)
+    df = pd.read_sql_query("SELECT * FROM trades WHERE status IN ('WIN', 'LOSS', 'EXPIRED')", conn)
     conn.close()
-    
+
     if df.empty:
         return {
             "total_trades": 0,
@@ -141,20 +147,24 @@ def get_performance_summary() -> dict:
             "best_trade_usdt": 0.0,
             "worst_trade_usdt": 0.0
         }
-        
-    wins = len(df[df['status'] == 'WIN'])
-    losses = len(df[df['status'] == 'LOSS'])
+
+    # EXPIRED (stale, 0 PnL) trades are excluded from win-rate but included
+    # in total count for transparency.
+    real = df[df['status'].isin(['WIN', 'LOSS'])]
+    expired = df[df['status'] == 'EXPIRED']
+    wins = len(real[real['status'] == 'WIN'])
+    losses = len(real[real['status'] == 'LOSS'])
     total = wins + losses
     win_rate = (wins / total * 100) if total > 0 else 0.0
-    
+
     return {
-        "total_trades": total,
+        "total_trades": wins + losses + len(expired),
         "wins": wins,
         "losses": losses,
         "win_rate_pct": round(win_rate, 1),
-        "total_pnl_usdt": round(float(df['pnl_usdt'].sum()), 2),
-        "best_trade_usdt": round(float(df['pnl_usdt'].max()), 2),
-        "worst_trade_usdt": round(float(df['pnl_usdt'].min()), 2)
+        "total_pnl_usdt": round(float(real['pnl_usdt'].sum()), 2),
+        "best_trade_usdt": round(float(real['pnl_usdt'].max()), 2) if total > 0 else 0.0,
+        "worst_trade_usdt": round(float(real['pnl_usdt'].min()), 2) if total > 0 else 0.0
     }
 
 def get_ai_learning_context(limit: int = 5) -> str:

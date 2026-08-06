@@ -18,7 +18,8 @@ class RiskManager:
 
     def check_daily_limits(self, current_balance: float) -> tuple[bool, str]:
         """
-        Checks if daily target profit (0.5%-1.0%) or max daily drawdown (-3%) has been hit.
+        Checks if daily target profit (0.5%-1.0%), max daily drawdown (-3%), or
+        max daily trade count has been hit.
         Returns (can_trade: bool, reason: str).
         """
         if self.initial_daily_balance <= 0:
@@ -26,7 +27,11 @@ class RiskManager:
             
         profit_amount = current_balance - self.initial_daily_balance
         self.current_daily_profit_pct = profit_amount / self.initial_daily_balance
-        
+
+        max_trades = getattr(config, "MAX_DAILY_TRADES", 5)
+        if self.trades_today >= max_trades:
+            return False, f"Max daily trades reached ({self.trades_today}/{max_trades}). Stopping new entries."
+
         if self.current_daily_profit_pct >= config.DAILY_TARGET_PROFIT_PCT:
             return False, f"Daily target profit achieved (+{self.current_daily_profit_pct*100:.2f}%). Capital preserved."
             
@@ -34,6 +39,10 @@ class RiskManager:
             return False, f"Max daily drawdown hit ({self.current_daily_profit_pct*100:.2f}%). Circuit breaker active."
             
         return True, f"Trading active (Daily PnL: {self.current_daily_profit_pct*100:+.2f}%)"
+
+    def record_trade(self):
+        """Increments today's trade counter after a new position is opened."""
+        self.trades_today += 1
 
     def calculate_position_parameters(
         self,
@@ -112,6 +121,9 @@ def adaptive_parameters(atr_14: float, entry_price: float, base_leverage: float 
     Bot auto-selects leverage + ATR multipliers based on current volatility.
     High volatility -> lower leverage + wider stops (avoid liquidation whipsaws).
     Low volatility -> higher leverage + tighter stops.
+
+    Never lets SL/TP fall below the config baselines (config.ATR_SL_MULTIPLIER /
+    config.ATR_TP_MULTIPLIER) so the bot keeps the widened risk envelope.
     """
     base_leverage = base_leverage if base_leverage else config.LEVERAGE
     atr_pct = (atr_14 / entry_price * 100) if entry_price > 0 else 1.0
@@ -132,6 +144,9 @@ def adaptive_parameters(atr_14: float, entry_price: float, base_leverage: float 
         leverage = base_leverage
         sl_mult = 1.2
         tp_mult = 2.0
+
+    sl_mult = max(sl_mult, config.ATR_SL_MULTIPLIER)
+    tp_mult = max(tp_mult, config.ATR_TP_MULTIPLIER)
 
     return {
         "leverage": max(1, int(leverage)),
