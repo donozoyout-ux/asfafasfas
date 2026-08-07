@@ -126,7 +126,7 @@ def generate_lessons(patterns: dict) -> list:
 
     def analyze_bucket(bucket: dict, condition_name: str):
         for key, data in sorted(bucket.items(), key=lambda x: x[1]["total"], reverse=True):
-            if data["total"] < 2:
+            if data["total"] < 3:  # Require at least 3 trades for statistical significance (was 2)
                 continue
             if data["win_rate"] >= 60:
                 lessons.append(
@@ -157,7 +157,7 @@ def compute_adaptation(closed_trades: list) -> dict:
     state = _load_state()
     summary = trade_logger.get_performance_summary()
 
-    recents = closed_trades[:10]
+    recents = closed_trades[:20]  # Use last 20 trades for streak calculation (was 10)
     if recents:
         # Update streaks
         streak = 0
@@ -190,7 +190,7 @@ def compute_adaptation(closed_trades: list) -> dict:
 
     # Adapt risk per trade
     if state["consecutive_losses"] >= 2:
-        risk = max(base_risk - state["consecutive_losses"] * 0.003, 0.01)
+        risk = max(base_risk - state["consecutive_losses"] * 0.003, 0.005)  # Min 0.5%
     else:
         risk = base_risk
 

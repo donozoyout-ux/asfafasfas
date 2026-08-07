@@ -37,23 +37,23 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # Bot Trading Parameters
 SYMBOL = "BTCUSDT"
-TIMEFRAME = "15m"
+TIMEFRAME = "1h"
 KLINE_LIMIT = 100  # Number of candles to fetch for indicator analysis
-LEVERAGE = 3        # Default leverage for Futures
+LEVERAGE = 2        # Default leverage for Futures (reduced from 3 for safety)
 
-# Risk & Money Management (Daily 0.5% - 1.0% Growth Strategy)
-RISK_PER_TRADE_PCT = 0.01       # 1.0% account equity risk per trade (conservative)
-DAILY_TARGET_PROFIT_PCT = 0.02  # 2.0% daily growth goal
-MAX_DAILY_DRAWDOWN_PCT = 0.03   # 3.0% max daily drawdown limit (safety circuit breaker)
-CONFIDENCE_THRESHOLD = 65       # AI confidence threshold (%) to execute trades (conservative)
+# Risk & Money Management (Daily 1.0% - 1.5% Growth Strategy)
+RISK_PER_TRADE_PCT = 0.005       # 0.5% account equity risk per trade (conservative)
+DAILY_TARGET_PROFIT_PCT = 0.015  # 1.5% daily growth goal
+MAX_DAILY_DRAWDOWN_PCT = 0.025   # 2.5% max daily drawdown limit (safety circuit breaker)
+CONFIDENCE_THRESHOLD = 70        # AI confidence threshold (%) to execute trades (selective)
 
 # Binance Futures Fee Rates (Standard Taker Fee = 0.05%)
 BINANCE_FUTURES_TAKER_FEE = 0.0005  # 0.05% per order
 ROUNDTRIP_FEE_RATE = BINANCE_FUTURES_TAKER_FEE * 2  # 0.10% total fee for opening + closing
 
 # ATR Dynamic Risk Multipliers
-ATR_SL_MULTIPLIER = 2.0  # Stop Loss = Entry +/- (2.0 * ATR) - wider to avoid noise
-ATR_TP_MULTIPLIER = 3.0  # Take Profit = Entry +/- (3.0 * ATR)
+ATR_SL_MULTIPLIER = 2.5  # Stop Loss = Entry +/- (2.5 * ATR) - wider to avoid noise
+ATR_TP_MULTIPLIER = 3.5  # Take Profit = Entry +/- (3.5 * ATR) - better R:R
 
 # Log / Execution Settings
-CHECK_INTERVAL_SECONDS = 60  # Interval to check position / market state in seconds (reduced trade frequency)
+CHECK_INTERVAL_SECONDS = 300  # Interval to check position / market state in seconds (5 min)

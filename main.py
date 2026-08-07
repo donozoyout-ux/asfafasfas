@@ -804,8 +804,176 @@ class BotController:
             f"💰 *Başlangıç Bakiyesi:* ${self.latest_balance:.2f} USDT\n\n"
             f"Komut listesi için Telegram'a `/help` yazabilirsiniz."
         )
+
+    def cleanup_stale_trade(self):
+        """Cleans up stale trade ID when Binance shows no position but we have active_trade_id."""
+        if self.active_trade_id:
+            try:
+                trade_logger.update_trade_exit(
+                    trade_id=self.active_trade_id,
+                    exit_price=self.latest_summary.get("current_price", 0),
+                    pnl_usdt=0.0,
+                    pnl_pct=0.0,
+                    status="EXPIRED"
+                )
+                print(f"[CLEANUP] Stale trade #{self.active_trade_id} marked as EXPIRED")
+            except Exception as e:
+                print(f"[WARN] Stale trade cleanup failed: {e}")
+            self.active_trade_id = None
+
+    def manage_open_position(self):
+        """
+        Manages open position: trailing SL, TP1 partial close, 
+        checks for EMA cross reversal, crash alerts.
+        """
+        pos = self.latest_position
+        ind = self.latest_summary
+        current_price = ind.get('current_price', 0)
+        atr_14 = ind.get('atr_14', 0)
+        side = pos.get('side', 'FLAT')
+        entry_price = pos.get('entry_price', 0)
+        qty = pos.get('amount', 0)
+        unrealized_pnl = pos.get('unrealized_pnl', 0)
         
-        risk_mgr = RiskManager(initial_balance=self.latest_balance)
+        if not current_price or not atr_14 or qty == 0:
+            return
+
+        pnl_pct = 0.0
+        if entry_price > 0:
+            if side == "LONG":
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            else:
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+
+        # === TRAILING STOP LOGIC ===
+        # Activate trailing after 1% profit or 1x ATR move in favor
+        min_trail_profit = max(0.01, atr_14 / entry_price * 100)  # 1% or 1x ATR
+        
+        if self.dry_run:
+            return
+            
+        try:
+            import risk_manager as risk_module
+            
+            # Check if trailing should activate
+            if risk_module.RiskManager().should_trail_activate(entry_price, current_price, side, min_trail_profit / 100):
+                # Calculate new trailing SL
+                new_sl = risk_module.RiskManager().calculate_trailing_stop(
+                    entry_price, current_price, atr_14, side, trail_mult=1.5
+                )
+                
+                # Get current SL from open algo orders
+                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                current_sl = None
+                for o in open_algo:
+                    if o.get("orderType") == "STOP_MARKET":
+                        current_sl = float(o.get("triggerPrice") or 0)
+                        break
+                
+                # Only update SL if it improves (moves in our favor)
+                should_update = False
+                if side == "LONG" and current_sl and new_sl > current_sl:
+                    should_update = True
+                elif side == "SHORT" and current_sl and new_sl < current_sl:
+                    should_update = True
+                
+                if should_update:
+                    # Cancel old SL and place new one
+                    self.executor.cancel_all_open_algo_orders(config.SYMBOL)
+                    time.sleep(0.5)
+                    self.executor.place_stop_loss_order(config.SYMBOL, side, new_sl, qty)
+                    # Re-place TP (since we cancelled all algo orders)
+                    tp_price = None
+                    for o in open_algo:
+                        if o.get("orderType") == "TAKE_PROFIT_MARKET":
+                            tp_price = float(o.get("triggerPrice") or 0)
+                            break
+                    if tp_price:
+                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty)
+                    print(f"🔄 Trailing SL updated: ${new_sl:.2f} (PnL: {pnl_pct:+.2f}%)")
+
+            # === TP1 PARTIAL CLOSE (50% at 1.5% profit or RSI extreme) ===
+            rsi = ind.get('rsi_14', 50)
+            tp1_triggered = False
+            
+            if side == "LONG":
+                if pnl_pct >= 1.5 or rsi >= 75:
+                    tp1_triggered = True
+            else:  # SHORT
+                if pnl_pct >= 1.5 or rsi <= 25:
+                    tp1_triggered = True
+            
+            if tp1_triggered:
+                # Check if we already did TP1 (track via order quantity)
+                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                tp_qty = sum(float(o.get("quantity", 0)) for o in open_algo if o.get("orderType") == "TAKE_PROFIT_MARKET")
+                
+                # If TP quantity matches full position, we haven't done partial close yet
+                if abs(tp_qty - qty) < 0.0001:
+                    # Close 50% at market
+                    close_qty = round(qty * 0.5, 3)
+                    close_side = "SELL" if side == "LONG" else "BUY"
+                    
+                    # Reduce position
+                    order = self.executor.place_market_order(config.SYMBOL, close_side, close_qty)
+                    if order:
+                        print(f"✅ TP1 PARTIAL CLOSE: {close_qty} {config.SYMBOL} @ ${current_price:.2f} (PnL: {pnl_pct:+.2f}%)")
+                        self.notifier.send_message(
+                            f"✅ *TP1 - YARIM KAPATMA*\n\n"
+                            f"📌 {side} | {close_qty} BTC @ ${current_price:.2f}\n"
+                            f"💰 PnL: ${unrealized_pnl * 0.5:+.2f} ({pnl_pct/2:+.2f}%)\n"
+                            f"🛡️ SL -> Breakeven (${entry_price:.2f})"
+                        )
+                        # Move SL to breakeven for remaining position
+                        self.executor.cancel_all_open_algo_orders(config.SYMBOL)
+                        time.sleep(0.5)
+                        self.executor.place_stop_loss_order(config.SYMBOL, side, entry_price, qty - close_qty)
+                        # Re-place TP for remaining
+                        tp_price = current_price + (atr_14 * 3.5) if side == "LONG" else current_price - (atr_14 * 3.5)
+                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty - close_qty)
+
+            # === EMA CROSS REVERSAL CHECK ===
+            ema9 = ind.get('ema_9', 0)
+            ema21 = ind.get('ema_21', 0)
+            short_cross = ind.get('short_term_ema_cross', '')
+            
+            reversal_signal = False
+            if side == "LONG" and short_cross == "BEARISH_CROSS" and pnl_pct > 0.5:
+                reversal_signal = True
+                reason = "EMA9/21 Bearish Cross (profit protection)"
+            elif side == "SHORT" and short_cross == "BULLISH_CROSS" and pnl_pct > 0.5:
+                reversal_signal = True
+                reason = "EMA9/21 Bullish Cross (profit protection)"
+            
+            if reversal_signal:
+                print(f"🔄 REVERSAL SIGNAL: {reason} - Closing position")
+                self.executor.close_position(config.SYMBOL)
+                self.notifier.send_message(
+                    f"🔄 *TREND REVERSAL - POZISYON KAPATILDI*\n\n"
+                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
+                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)\n"
+                    f"⚡ Neden: {reason}"
+                )
+
+            # === CRASH ALERT PROTECTION ===
+            if ind.get('crash_alert') and pnl_pct > -1.0:
+                # If crash alert and we're not deep in loss, close defensively
+                print(f"🚨 CRASH ALERT ACTIVE - Defensive close")
+                self.executor.close_position(config.SYMBOL)
+                self.notifier.send_message(
+                    f"🚨 *FLASH CRASH KORUMASI - POZISYON KAPATILDI*\n\n"
+                    f"⚠️ {ind.get('crash_message', 'Aniden düşüş tespit edildi')}\n"
+                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
+                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)"
+                )
+
+            # === DAILY TARGET HIT - CLOSE ALL ===
+            # (Handled in main loop via risk_mgr.is_daily_target_hit())
+
+        except Exception as e:
+            print(f"[WARN] Position management failed: {e}")
+
+    def start(self):
         cycle_count = 0
         previous_position_side = "FLAT"
 
@@ -891,12 +1059,11 @@ class BotController:
                 else:
                     self.latest_position = {"side": "FLAT", "amount": 0, "entry_price": 0, "unrealized_pnl": 0, "liquidation_price": 0}
 
+                # Check if position was closed (Binance shows FLAT but we had a position)
                 if previous_position_side != "FLAT" and self.latest_position["side"] == "FLAT":
                     print("[INFO] Position closed! Fetching realized PnL with fees...")
                     if self.active_trade_id:
                         # Fetch real realized PnL including commissions from Binance
-                        # Only look at income AFTER this trade's entry time so we
-                        # don't accumulate PnL from older trades.
                         realized = {"net_pnl": 0.0, "realized_pnl": 0.0, "commission": 0.0}
                         try:
                             if not self.dry_run:
@@ -963,129 +1130,146 @@ class BotController:
 
                 # Check daily risk limits
                 can_trade, limit_msg = risk_mgr.check_daily_limits(self.latest_balance)
+                daily_target_hit = risk_mgr.is_daily_target_hit()
                 print(f"🛡️  Risk Manager Status: {limit_msg}")
-                
+
+                # === POSITION MANAGEMENT (if position exists) ===
                 if self.latest_position["side"] != "FLAT":
                     pnl = self.latest_position['unrealized_pnl']
                     pnl_color = "🟢" if pnl >= 0 else "🔴"
                     print(f"⚡ ACTIVE POSITION: {self.latest_position['side']} {self.latest_position['amount']} {config.SYMBOL} @ ${self.latest_position['entry_price']:.2f} | UnPNL: {pnl_color} ${pnl:+.2f}")
+                    
+                    # Manage open position (trailing SL, TP1 partial, etc.)
+                    self.manage_open_position()
+                    
+                    print(f"😴 Sleeping for {config.CHECK_INTERVAL_SECONDS} seconds...\n")
+                    time.sleep(config.CHECK_INTERVAL_SECONDS)
+                    continue
 
-                    # Auto-protect: if position is open but no SL/TP algo orders exist,
-                    # let the bot compute adaptive SL/TP itself and place them.
-                    if not self.dry_run:
-                        try:
-                            open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
-                            has_sl = any(o.get("orderType") == "STOP_MARKET" for o in open_algo)
-                            has_tp = any(o.get("orderType") == "TAKE_PROFIT_MARKET" for o in open_algo)
-                            if not has_sl or not has_tp:
-                                import risk_manager as risk_module
-                                current = self.latest_summary["current_price"]
-                                qty = self.latest_position["amount"]
-                                adaptive = risk_module.adaptive_parameters(
-                                    atr_14=self.latest_summary["atr_14"],
-                                    entry_price=current,
-                                    base_leverage=config.LEVERAGE
-                                )
-                                if self.latest_position["side"] == "LONG":
-                                    sl_price = current - (self.latest_summary["atr_14"] * adaptive["sl_multiplier"])
-                                    tp_price = current + (self.latest_summary["atr_14"] * adaptive["tp_multiplier"])
-                                else:
-                                    sl_price = current + (self.latest_summary["atr_14"] * adaptive["sl_multiplier"])
-                                    tp_price = current - (self.latest_summary["atr_14"] * adaptive["tp_multiplier"])
-                                print(f"🛡️  No SL/TP on open position -> bot placing SL ${sl_price:.2f} / TP ${tp_price:.2f} (adaptive {adaptive['sl_multiplier']}x/{adaptive['tp_multiplier']}x ATR)")
-                                if not has_sl:
-                                    self.executor.place_stop_loss_order(config.SYMBOL, self.latest_position["side"], sl_price, qty)
-                                if not has_tp:
-                                    self.executor.place_take_profit_order(config.SYMBOL, self.latest_position["side"], tp_price, qty)
-                        except Exception as e:
-                            print(f"[WARN] Auto SL/TP placement failed: {e}")
-                else:
-                    if not can_trade:
-                        print(f"⏸️  Trading paused by Risk Manager: {limit_msg}")
-                        time.sleep(config.CHECK_INTERVAL_SECONDS)
-                        continue
+                # === NO POSITION - CHECK IF WE CAN OPEN NEW ===
+                if not can_trade:
+                    print(f"⏸️  Trading paused by Risk Manager: {limit_msg}")
+                    time.sleep(config.CHECK_INTERVAL_SECONDS)
+                    continue
 
-                    # 3. Request Groq AI Decision with TradingView + News + Derivatives Context
-                    print("🧠 Consulting Groq Llama-3.3 AI Brain...")
-                    ai_decision = ai_brain.analyze_market_with_ai(
+                # Prevent duplicate: if we have active_trade_id but no position, clean up
+                if self.active_trade_id is not None:
+                    print("[WARN] Active trade ID exists but no position on Binance - cleaning up stale trade")
+                    self.cleanup_stale_trade()
+                    time.sleep(config.CHECK_INTERVAL_SECONDS)
+                    continue
+
+                # 3. Request Groq AI Decision with TradingView + News + Derivatives Context
+                print("🧠 Consulting Groq Llama-3.3 AI Brain...")
+                ai_decision = ai_brain.analyze_market_with_ai(
+                    self.latest_summary,
+                    self.ticker_24h,
+                    multiframe_data=self.multiframe_summary,
+                    tradingview_data=self.latest_tradingview,
+                    current_position=self.latest_position["side"],
+                    news_data=self.latest_news,
+                    derivatives_data=self.latest_derivatives
+                )
+                # If Groq is rate-limited, fall back to a rule-based signal so the
+                # bot keeps trading instead of sitting idle the whole day.
+                if ai_brain.is_rate_limited(ai_decision):
+                    print("[FALLBACK] Groq AI rate-limited -> using rule-based signal")
+                    ai_decision = ai_brain.get_fallback_signal(
                         self.latest_summary,
-                        self.ticker_24h,
-                        multiframe_data=self.multiframe_summary,
                         tradingview_data=self.latest_tradingview,
-                        current_position=self.latest_position["side"],
                         news_data=self.latest_news,
-                        derivatives_data=self.latest_derivatives
+                        derivatives_data=self.latest_derivatives,
+                        multiframe_data=self.multiframe_summary,
+                        current_position=self.latest_position["side"],
                     )
-                    # If Groq is rate-limited, fall back to a rule-based signal so the
-                    # bot keeps trading instead of sitting idle the whole day.
-                    if ai_brain.is_rate_limited(ai_decision):
-                        print("[FALLBACK] Groq AI rate-limited -> using rule-based signal")
-                        ai_decision = ai_brain.get_fallback_signal(
-                            self.latest_summary,
-                            tradingview_data=self.latest_tradingview,
-                            news_data=self.latest_news,
-                            derivatives_data=self.latest_derivatives,
-                            multiframe_data=self.multiframe_summary,
-                            current_position=self.latest_position["side"],
-                        )
-                    self.latest_ai_decision = ai_decision
-                    
-                    action = ai_decision.get("action", "HOLD").upper()
-                    confidence = ai_decision.get("confidence", 0)
-                    reasoning = ai_decision.get("reasoning", "Henüz karar verilmedi")
-                    sl_mult = ai_decision.get("sl_multiplier_atr", config.ATR_SL_MULTIPLIER)
-                    tp_mult = ai_decision.get("tp_multiplier_atr", config.ATR_TP_MULTIPLIER)
-                    
-                    print(f"🤖 AI Recommendation: [{action}] (Confidence: {confidence}%)")
-                    print(f"💬 AI Reasoning: {reasoning}")
-                    
-                    # Get adaptive confidence threshold from learning engine
-                    adaptation = {"confidence_threshold": config.CONFIDENCE_THRESHOLD,
-                                  "risk_per_trade_pct": config.RISK_PER_TRADE_PCT * 100}
-                    try:
-                        closed = trade_logger.get_closed_trades(limit=10)
-                        adaptation = learning_engine.compute_adaptation(closed)
-                        current_threshold = adaptation["confidence_threshold"]
-                    except Exception:
-                        current_threshold = config.CONFIDENCE_THRESHOLD
+                self.latest_ai_decision = ai_decision
+                
+                action = ai_decision.get("action", "HOLD").upper()
+                confidence = ai_decision.get("confidence", 0)
+                reasoning = ai_decision.get("reasoning", "Henüz karar verilmedi")
+                sl_mult = ai_decision.get("sl_multiplier_atr", config.ATR_SL_MULTIPLIER)
+                tp_mult = ai_decision.get("tp_multiplier_atr", config.ATR_TP_MULTIPLIER)
+                
+                print(f"🤖 AI Recommendation: [{action}] (Confidence: {confidence}%)")
+                print(f"💬 AI Reasoning: {reasoning}")
+                
+                # Get adaptive confidence threshold from learning engine
+                adaptation = {"confidence_threshold": config.CONFIDENCE_THRESHOLD,
+                              "risk_per_trade_pct": config.RISK_PER_TRADE_PCT * 100}
+                try:
+                    closed = trade_logger.get_closed_trades(limit=10)
+                    adaptation = learning_engine.compute_adaptation(closed)
+                    current_threshold = adaptation["confidence_threshold"]
+                except Exception:
+                    current_threshold = config.CONFIDENCE_THRESHOLD
 
-                    # When running on the rule-based fallback (Groq rate-limited),
-                    # use a lower, fixed threshold. The learning engine raises its
-                    # threshold after a losing streak, which would otherwise lock
-                    # the fallback out of trading entirely (e.g. 66 < 75 forever).
-                    if ai_decision.get("fallback"):
-                        current_threshold = min(current_threshold, config.CONFIDENCE_THRESHOLD)
-                        print(f"🔧 Fallback mode -> threshold lowered to {current_threshold}%")
-                    
-                    # 4. Execute Trade if High Conviction (adaptive threshold)
-                    if action in ["LONG", "SHORT"] and confidence >= current_threshold:
-                        # Auto-tune leverage + multipliers based on volatility
-                        import risk_manager as risk_module
-                        adaptive = risk_module.adaptive_parameters(
-                            atr_14=self.latest_summary['atr_14'],
-                            entry_price=self.latest_summary['current_price'],
-                            base_leverage=config.LEVERAGE
-                        )
-                        adaptive_sl = adaptive["sl_multiplier"]
-                        adaptive_tp = adaptive["tp_multiplier"]
-                        adaptive_lev = adaptive["leverage"]
-                        print(f"⚙️ Adaptive: kaldıraç {adaptive_lev}x | SL {adaptive_sl}x ATR | TP {adaptive_tp}x ATR | ATR% {adaptive['atr_pct']}")
+                # When running on the rule-based fallback (Groq rate-limited),
+                # use a lower, fixed threshold. The learning engine raises its
+                # threshold after a losing streak, which would otherwise lock
+                # the fallback out of trading entirely (e.g. 66 < 75 forever).
+                if ai_decision.get("fallback"):
+                    current_threshold = min(current_threshold, config.CONFIDENCE_THRESHOLD)
+                    print(f"🔧 Fallback mode -> threshold lowered to {current_threshold}%")
+                
+                # 4. Execute Trade if High Conviction (adaptive threshold)
+                if action in ["LONG", "SHORT"] and confidence >= current_threshold:
+                    # Auto-tune leverage + multipliers based on volatility
+                    import risk_manager as risk_module
+                    adaptive = risk_module.adaptive_parameters(
+                        atr_14=self.latest_summary['atr_14'],
+                        entry_price=self.latest_summary['current_price'],
+                        base_leverage=config.LEVERAGE
+                    )
+                    adaptive_sl = adaptive["sl_multiplier"]
+                    adaptive_tp = adaptive["tp_multiplier"]
+                    adaptive_lev = adaptive["leverage"]
+                    print(f"⚙️ Adaptive: kaldıraç {adaptive_lev}x | SL {adaptive_sl}x ATR | TP {adaptive_tp}x ATR | ATR% {adaptive['atr_pct']}")
 
-                        trade_params = risk_mgr.calculate_position_parameters(
-                            account_balance=self.latest_balance,
-                            entry_price=self.latest_summary['current_price'],
-                            atr_14=self.latest_summary['atr_14'],
+                    trade_params = risk_mgr.calculate_position_parameters(
+                        account_balance=self.latest_balance,
+                        entry_price=self.latest_summary['current_price'],
+                        atr_14=self.latest_summary['atr_14'],
+                        side=action,
+                        sl_mult=adaptive_sl,
+                        tp_mult=adaptive_tp,
+                        risk_pct=adaptation.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) / 100,
+                        leverage=adaptive_lev
+                    )
+                    
+                    print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")
+                    
+                    if self.dry_run:
+                        # DRY-RUN: simulate success, log the trade
+                        self.active_trade_id = trade_logger.log_trade_entry(
+                            symbol=config.SYMBOL,
                             side=action,
-                            sl_mult=adaptive_sl,
-                            tp_mult=adaptive_tp,
-                            risk_pct=adaptation.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) / 100,
-                            leverage=adaptive_lev
+                            entry_price=trade_params['entry_price'],
+                            quantity=trade_params['quantity'],
+                            sl_price=trade_params['sl_price'],
+                            tp_price=trade_params['tp_price'],
+                            ai_confidence=confidence,
+                            ai_reasoning=reasoning,
+                            indicator_summary=self.latest_summary
                         )
+
+                        self.notifier.send_trade_alert(
+                            action=f"[DRY-RUN] {action}",
+                            price=trade_params['entry_price'],
+                            qty=trade_params['quantity'],
+                            sl=trade_params['sl_price'],
+                            tp=trade_params['tp_price'],
+                            reasoning=reasoning
+                        )
+                    else:
+                        order_side = "BUY" if action == "LONG" else "SELL"
+                        try:
+                            self.executor.set_leverage(config.SYMBOL, int(trade_params.get("leverage", config.LEVERAGE)))
+                        except Exception as e:
+                            print(f"[WARN] Leverage apply failed: {e}")
+                        market_order = self.executor.place_market_order(config.SYMBOL, order_side, trade_params['quantity'])
                         
-                        print(f"\n🎯 HIGH CONVICTION SIGNAL DETECTED!")
-                        
-                        if self.dry_run:
-                            # DRY-RUN: simulate success, log the trade
+                        if market_order:
+                            # Only log after the order actually fills
                             self.active_trade_id = trade_logger.log_trade_entry(
                                 symbol=config.SYMBOL,
                                 side=action,
@@ -1097,8 +1281,12 @@ class BotController:
                                 ai_reasoning=reasoning,
                                 indicator_summary=self.latest_summary
                             )
+                            time.sleep(1)
+                            self.executor.place_stop_loss_order(config.SYMBOL, action, trade_params['sl_price'], trade_params['quantity'])
+                            self.executor.place_take_profit_order(config.SYMBOL, action, trade_params['tp_price'], trade_params['quantity'])
+                            
                             self.notifier.send_trade_alert(
-                                action=f"[DRY-RUN] {action}",
+                                action=action,
                                 price=trade_params['entry_price'],
                                 qty=trade_params['quantity'],
                                 sl=trade_params['sl_price'],
@@ -1106,48 +1294,15 @@ class BotController:
                                 reasoning=reasoning
                             )
                         else:
-                            order_side = "BUY" if action == "LONG" else "SELL"
-                            try:
-                                self.executor.set_leverage(config.SYMBOL, int(trade_params.get("leverage", config.LEVERAGE)))
-                            except Exception as e:
-                                print(f"[WARN] Leverage apply failed: {e}")
-                            market_order = self.executor.place_market_order(config.SYMBOL, order_side, trade_params['quantity'])
-                            
-                            if market_order:
-                                # Only log after the order actually fills
-                                self.active_trade_id = trade_logger.log_trade_entry(
-                                    symbol=config.SYMBOL,
-                                    side=action,
-                                    entry_price=trade_params['entry_price'],
-                                    quantity=trade_params['quantity'],
-                                    sl_price=trade_params['sl_price'],
-                                    tp_price=trade_params['tp_price'],
-                                    ai_confidence=confidence,
-                                    ai_reasoning=reasoning,
-                                    indicator_summary=self.latest_summary
-                                )
-                                time.sleep(1)
-                                self.executor.place_stop_loss_order(config.SYMBOL, action, trade_params['sl_price'], trade_params['quantity'])
-                                self.executor.place_take_profit_order(config.SYMBOL, action, trade_params['tp_price'], trade_params['quantity'])
-                                
-                                self.notifier.send_trade_alert(
-                                    action=action,
-                                    price=trade_params['entry_price'],
-                                    qty=trade_params['quantity'],
-                                    sl=trade_params['sl_price'],
-                                    tp=trade_params['tp_price'],
-                                    reasoning=reasoning
-                                )
-                            else:
-                                print(f"[ERROR] Market order FAILED for {action} - trade NOT logged.")
-                                self.record_order_error("market_order_failed", f"{action} {trade_params['quantity']} @ {trade_params['entry_price']}")
-                                self.notifier.send_message(
-                                    f"❌ *İŞLEM BAŞARISIZ:* {action} sinyali geldi ama piyasa emri yerine getirilemedi "
-                                    f"({trade_params['quantity']} {config.SYMBOL} @ ${trade_params['entry_price']:.2f}).\n"
-                                    f"Kasa/leverage yetersiz olabilir."
-                                )
-                    else:
-                        print("⌛ Decision: HOLD. Waiting for higher conviction setup...")
+                            print(f"[ERROR] Market order FAILED for {action} - trade NOT logged.")
+                            self.record_order_error("market_order_failed", f"{action} {trade_params['quantity']} @ {trade_params['entry_price']}")
+                            self.notifier.send_message(
+                                f"❌ *İŞLEM BAŞARISIZ:* {action} sinyali geldi ama piyasa emri yerine getirilemedi "
+                                f"({trade_params['quantity']} {config.SYMBOL} @ ${trade_params['entry_price']:.2f}).\n"
+                                f"Kasa/leverage yetersiz olabilir."
+                            )
+                else:
+                    print("⌛ Decision: HOLD. Waiting for higher conviction setup...")
 
                 print(f"😴 Sleeping for {config.CHECK_INTERVAL_SECONDS} seconds...\n")
                 time.sleep(config.CHECK_INTERVAL_SECONDS)
