@@ -805,179 +805,8 @@ class BotController:
             f"Komut listesi için Telegram'a `/help` yazabilirsiniz."
         )
 
-    def cleanup_stale_trade(self):
-        """Cleans up stale trade ID when Binance shows no position but we have active_trade_id."""
-        if self.active_trade_id:
-            try:
-                trade_logger.update_trade_exit(
-                    trade_id=self.active_trade_id,
-                    exit_price=self.latest_summary.get("current_price", 0),
-                    pnl_usdt=0.0,
-                    pnl_pct=0.0,
-                    status="EXPIRED"
-                )
-                print(f"[CLEANUP] Stale trade #{self.active_trade_id} marked as EXPIRED")
-            except Exception as e:
-                print(f"[WARN] Stale trade cleanup failed: {e}")
-            self.active_trade_id = None
-
-    def manage_open_position(self):
-        """
-        Manages open position: trailing SL, TP1 partial close, 
-        checks for EMA cross reversal, crash alerts.
-        """
-        pos = self.latest_position
-        ind = self.latest_summary
-        current_price = ind.get('current_price', 0)
-        atr_14 = ind.get('atr_14', 0)
-        side = pos.get('side', 'FLAT')
-        entry_price = pos.get('entry_price', 0)
-        qty = pos.get('amount', 0)
-        unrealized_pnl = pos.get('unrealized_pnl', 0)
-        
-        if not current_price or not atr_14 or qty == 0:
-            return
-
-        pnl_pct = 0.0
-        if entry_price > 0:
-            if side == "LONG":
-                pnl_pct = (current_price - entry_price) / entry_price * 100
-            else:
-                pnl_pct = (entry_price - current_price) / entry_price * 100
-
-        # === TRAILING STOP LOGIC ===
-        # Activate trailing after 1% profit or 1x ATR move in favor
-        min_trail_profit = max(0.01, atr_14 / entry_price * 100)  # 1% or 1x ATR
-        
-        if self.dry_run:
-            return
-            
-        try:
-            import risk_manager as risk_module
-            
-            # Check if trailing should activate
-            if risk_module.RiskManager().should_trail_activate(entry_price, current_price, side, min_trail_profit / 100):
-                # Calculate new trailing SL
-                new_sl = risk_module.RiskManager().calculate_trailing_stop(
-                    entry_price, current_price, atr_14, side, trail_mult=1.5
-                )
-                
-                # Get current SL from open algo orders
-                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
-                current_sl = None
-                for o in open_algo:
-                    if o.get("orderType") == "STOP_MARKET":
-                        current_sl = float(o.get("triggerPrice") or 0)
-                        break
-                
-                # Only update SL if it improves (moves in our favor)
-                should_update = False
-                if side == "LONG" and current_sl and new_sl > current_sl:
-                    should_update = True
-                elif side == "SHORT" and current_sl and new_sl < current_sl:
-                    should_update = True
-                
-                if should_update:
-                    # Cancel old SL and place new one
-                    self.executor.cancel_all_open_algo_orders(config.SYMBOL)
-                    time.sleep(0.5)
-                    self.executor.place_stop_loss_order(config.SYMBOL, side, new_sl, qty)
-                    # Re-place TP (since we cancelled all algo orders)
-                    tp_price = None
-                    for o in open_algo:
-                        if o.get("orderType") == "TAKE_PROFIT_MARKET":
-                            tp_price = float(o.get("triggerPrice") or 0)
-                            break
-                    if tp_price:
-                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty)
-                    print(f"🔄 Trailing SL updated: ${new_sl:.2f} (PnL: {pnl_pct:+.2f}%)")
-
-            # === TP1 PARTIAL CLOSE (50% at 1.5% profit or RSI extreme) ===
-            rsi = ind.get('rsi_14', 50)
-            tp1_triggered = False
-            
-            if side == "LONG":
-                if pnl_pct >= 1.5 or rsi >= 75:
-                    tp1_triggered = True
-            else:  # SHORT
-                if pnl_pct >= 1.5 or rsi <= 25:
-                    tp1_triggered = True
-            
-            if tp1_triggered:
-                # Check if we already did TP1 (track via order quantity)
-                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
-                tp_qty = sum(float(o.get("quantity", 0)) for o in open_algo if o.get("orderType") == "TAKE_PROFIT_MARKET")
-                
-                # If TP quantity matches full position, we haven't done partial close yet
-                if abs(tp_qty - qty) < 0.0001:
-                    # Close 50% at market
-                    close_qty = round(qty * 0.5, 3)
-                    close_side = "SELL" if side == "LONG" else "BUY"
-                    
-                    # Reduce position
-                    order = self.executor.place_market_order(config.SYMBOL, close_side, close_qty)
-                    if order:
-                        print(f"✅ TP1 PARTIAL CLOSE: {close_qty} {config.SYMBOL} @ ${current_price:.2f} (PnL: {pnl_pct:+.2f}%)")
-                        self.notifier.send_message(
-                            f"✅ *TP1 - YARIM KAPATMA*\n\n"
-                            f"📌 {side} | {close_qty} BTC @ ${current_price:.2f}\n"
-                            f"💰 PnL: ${unrealized_pnl * 0.5:+.2f} ({pnl_pct/2:+.2f}%)\n"
-                            f"🛡️ SL -> Breakeven (${entry_price:.2f})"
-                        )
-                        # Move SL to breakeven for remaining position
-                        self.executor.cancel_all_open_algo_orders(config.SYMBOL)
-                        time.sleep(0.5)
-                        self.executor.place_stop_loss_order(config.SYMBOL, side, entry_price, qty - close_qty)
-                        # Re-place TP for remaining
-                        tp_price = current_price + (atr_14 * 3.5) if side == "LONG" else current_price - (atr_14 * 3.5)
-                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty - close_qty)
-
-            # === EMA CROSS REVERSAL CHECK ===
-            ema9 = ind.get('ema_9', 0)
-            ema21 = ind.get('ema_21', 0)
-            short_cross = ind.get('short_term_ema_cross', '')
-            
-            reversal_signal = False
-            if side == "LONG" and short_cross == "BEARISH_CROSS" and pnl_pct > 0.5:
-                reversal_signal = True
-                reason = "EMA9/21 Bearish Cross (profit protection)"
-            elif side == "SHORT" and short_cross == "BULLISH_CROSS" and pnl_pct > 0.5:
-                reversal_signal = True
-                reason = "EMA9/21 Bullish Cross (profit protection)"
-            
-            if reversal_signal:
-                print(f"🔄 REVERSAL SIGNAL: {reason} - Closing position")
-                self.executor.close_position(config.SYMBOL)
-                self.notifier.send_message(
-                    f"🔄 *TREND REVERSAL - POZISYON KAPATILDI*\n\n"
-                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
-                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)\n"
-                    f"⚡ Neden: {reason}"
-                )
-
-            # === CRASH ALERT PROTECTION ===
-            if ind.get('crash_alert') and pnl_pct > -1.0:
-                # If crash alert and we're not deep in loss, close defensively
-                print(f"🚨 CRASH ALERT ACTIVE - Defensive close")
-                self.executor.close_position(config.SYMBOL)
-                self.notifier.send_message(
-                    f"🚨 *FLASH CRASH KORUMASI - POZISYON KAPATILDI*\n\n"
-                    f"⚠️ {ind.get('crash_message', 'Aniden düşüş tespit edildi')}\n"
-                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
-                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)"
-                )
-
-            # === DAILY TARGET HIT - CLOSE ALL ===
-            # (Handled in main loop via risk_mgr.is_daily_target_hit())
-
-        except Exception as e:
-            print(f"[WARN] Position management failed: {e}")
-
-    def start(self):
-        cycle_count = 0
+        # === POSITION ADOPTION (from second start method) ===
         previous_position_side = "FLAT"
-
-        # Adopt any pre-existing open position as our own trade so PnL is tracked on close
         try:
             if not self.dry_run:
                 existing_pos = self.executor.get_open_position(config.SYMBOL)
@@ -997,8 +826,6 @@ class BotController:
                     )
                     print(f"[ADOPT] Mevcut {existing_pos['side']} pozisyon benimsendi (Trade #{self.active_trade_id})")
                 else:
-                    # Binance'te pozisyon yoksa, DB'de kalan ölü OPEN kayıtlarını kapat
-                    # (önceki seanslardan düzgün loglanmadan kapanmış pozisyonlar)
                     try:
                         stale = trade_logger.get_stale_open_trades()
                         for t in stale:
@@ -1014,7 +841,9 @@ class BotController:
                         print(f"[WARN] Stale open trade cleanup failed: {e2}")
         except Exception as e:
             print(f"[WARN] Position adoption check failed: {e}")
-        
+
+        # === MAIN TRADING LOOP ===
+        cycle_count = 0
         while True:
             try:
                 if self.paused:
@@ -1050,8 +879,6 @@ class BotController:
                 if not self.dry_run:
                     self.latest_position = self.executor.get_open_position(config.SYMBOL)
                     if self.latest_position.get("error"):
-                        # Transient API failure: do NOT treat as position closed,
-                        # just retry next cycle to avoid phantom FLAT + failed orders.
                         print("[WARN] Position fetch failed (transient) - skipping cycle to avoid false FLAT")
                         time.sleep(config.CHECK_INTERVAL_SECONDS)
                         continue
@@ -1063,7 +890,6 @@ class BotController:
                 if previous_position_side != "FLAT" and self.latest_position["side"] == "FLAT":
                     print("[INFO] Position closed! Fetching realized PnL with fees...")
                     if self.active_trade_id:
-                        # Fetch real realized PnL including commissions from Binance
                         realized = {"net_pnl": 0.0, "realized_pnl": 0.0, "commission": 0.0}
                         try:
                             if not self.dry_run:
@@ -1314,6 +1140,173 @@ class BotController:
                 print(f"[EXCEPT] Loop exception: {e}")
                 time.sleep(10)
 
+    def cleanup_stale_trade(self):
+        """Cleans up stale trade ID when Binance shows no position but we have active_trade_id."""
+        if self.active_trade_id:
+            try:
+                trade_logger.update_trade_exit(
+                    trade_id=self.active_trade_id,
+                    exit_price=self.latest_summary.get("current_price", 0),
+                    pnl_usdt=0.0,
+                    pnl_pct=0.0,
+                    status="EXPIRED"
+                )
+                print(f"[CLEANUP] Stale trade #{self.active_trade_id} marked as EXPIRED")
+            except Exception as e:
+                print(f"[WARN] Stale trade cleanup failed: {e}")
+            self.active_trade_id = None
+
+    def manage_open_position(self):
+        """
+        Manages open position: trailing SL, TP1 partial close, 
+        checks for EMA cross reversal, crash alerts.
+        """
+        pos = self.latest_position
+        ind = self.latest_summary
+        current_price = ind.get('current_price', 0)
+        atr_14 = ind.get('atr_14', 0)
+        side = pos.get('side', 'FLAT')
+        entry_price = pos.get('entry_price', 0)
+        qty = pos.get('amount', 0)
+        unrealized_pnl = pos.get('unrealized_pnl', 0)
+        
+        if not current_price or not atr_14 or qty == 0:
+            return
+
+        pnl_pct = 0.0
+        if entry_price > 0:
+            if side == "LONG":
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            else:
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+
+        # === TRAILING STOP LOGIC ===
+        # Activate trailing after 1% profit or 1x ATR move in favor
+        min_trail_profit = max(0.01, atr_14 / entry_price * 100)  # 1% or 1x ATR
+        
+        if self.dry_run:
+            return
+            
+        try:
+            import risk_manager as risk_module
+            
+            # Check if trailing should activate
+            if risk_module.RiskManager().should_trail_activate(entry_price, current_price, side, min_trail_profit / 100):
+                # Calculate new trailing SL
+                new_sl = risk_module.RiskManager().calculate_trailing_stop(
+                    entry_price, current_price, atr_14, side, trail_mult=1.5
+                )
+                
+                # Get current SL from open algo orders
+                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                current_sl = None
+                for o in open_algo:
+                    if o.get("orderType") == "STOP_MARKET":
+                        current_sl = float(o.get("triggerPrice") or 0)
+                        break
+                
+                # Only update SL if it improves (moves in our favor)
+                should_update = False
+                if side == "LONG" and current_sl and new_sl > current_sl:
+                    should_update = True
+                elif side == "SHORT" and current_sl and new_sl < current_sl:
+                    should_update = True
+                
+                if should_update:
+                    # Cancel old SL and place new one
+                    self.executor.cancel_all_open_algo_orders(config.SYMBOL)
+                    time.sleep(0.5)
+                    self.executor.place_stop_loss_order(config.SYMBOL, side, new_sl, qty)
+                    # Re-place TP (since we cancelled all algo orders)
+                    tp_price = None
+                    for o in open_algo:
+                        if o.get("orderType") == "TAKE_PROFIT_MARKET":
+                            tp_price = float(o.get("triggerPrice") or 0)
+                            break
+                    if tp_price:
+                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty)
+                    print(f"🔄 Trailing SL updated: ${new_sl:.2f} (PnL: {pnl_pct:+.2f}%)")
+
+            # === TP1 PARTIAL CLOSE (50% at 1.5% profit or RSI extreme) ===
+            rsi = ind.get('rsi_14', 50)
+            tp1_triggered = False
+            
+            if side == "LONG":
+                if pnl_pct >= 1.5 or rsi >= 75:
+                    tp1_triggered = True
+            else:  # SHORT
+                if pnl_pct >= 1.5 or rsi <= 25:
+                    tp1_triggered = True
+            
+            if tp1_triggered:
+                # Check if we already did TP1 (track via order quantity)
+                open_algo = self.executor.get_open_algo_orders(config.SYMBOL)
+                tp_qty = sum(float(o.get("quantity", 0)) for o in open_algo if o.get("orderType") == "TAKE_PROFIT_MARKET")
+                
+                # If TP quantity matches full position, we haven't done partial close yet
+                if abs(tp_qty - qty) < 0.0001:
+                    # Close 50% at market
+                    close_qty = round(qty * 0.5, 3)
+                    close_side = "SELL" if side == "LONG" else "BUY"
+                    
+                    # Reduce position
+                    order = self.executor.place_market_order(config.SYMBOL, close_side, close_qty)
+                    if order:
+                        print(f"✅ TP1 PARTIAL CLOSE: {close_qty} {config.SYMBOL} @ ${current_price:.2f} (PnL: {pnl_pct:+.2f}%)")
+                        self.notifier.send_message(
+                            f"✅ *TP1 - YARIM KAPATMA*\n\n"
+                            f"📌 {side} | {close_qty} BTC @ ${current_price:.2f}\n"
+                            f"💰 PnL: ${unrealized_pnl * 0.5:+.2f} ({pnl_pct/2:+.2f}%)\n"
+                            f"🛡️ SL -> Breakeven (${entry_price:.2f})"
+                        )
+                        # Move SL to breakeven for remaining position
+                        self.executor.cancel_all_open_algo_orders(config.SYMBOL)
+                        time.sleep(0.5)
+                        self.executor.place_stop_loss_order(config.SYMBOL, side, entry_price, qty - close_qty)
+                        # Re-place TP for remaining
+                        tp_price = current_price + (atr_14 * 3.5) if side == "LONG" else current_price - (atr_14 * 3.5)
+                        self.executor.place_take_profit_order(config.SYMBOL, side, tp_price, qty - close_qty)
+
+            # === EMA CROSS REVERSAL CHECK ===
+            ema9 = ind.get('ema_9', 0)
+            ema21 = ind.get('ema_21', 0)
+            short_cross = ind.get('short_term_ema_cross', '')
+            
+            reversal_signal = False
+            if side == "LONG" and short_cross == "BEARISH_CROSS" and pnl_pct > 0.5:
+                reversal_signal = True
+                reason = "EMA9/21 Bearish Cross (profit protection)"
+            elif side == "SHORT" and short_cross == "BULLISH_CROSS" and pnl_pct > 0.5:
+                reversal_signal = True
+                reason = "EMA9/21 Bullish Cross (profit protection)"
+            
+            if reversal_signal:
+                print(f"🔄 REVERSAL SIGNAL: {reason} - Closing position")
+                self.executor.close_position(config.SYMBOL)
+                self.notifier.send_message(
+                    f"🔄 *TREND REVERSAL - POZISYON KAPATILDI*\n\n"
+                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
+                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)\n"
+                    f"⚡ Neden: {reason}"
+                )
+
+            # === CRASH ALERT PROTECTION ===
+            if ind.get('crash_alert') and pnl_pct > -1.0:
+                # If crash alert and we're not deep in loss, close defensively
+                print(f"🚨 CRASH ALERT ACTIVE - Defensive close")
+                self.executor.close_position(config.SYMBOL)
+                self.notifier.send_message(
+                    f"🚨 *FLASH CRASH KORUMASI - POZISYON KAPATILDI*\n\n"
+                    f"⚠️ {ind.get('crash_message', 'Aniden düşüş tespit edildi')}\n"
+                    f"📌 {side} @ ${entry_price:.2f} -> ${current_price:.2f}\n"
+                    f"💰 PnL: ${unrealized_pnl:+.2f} ({pnl_pct:+.2f}%)"
+                )
+
+            # === DAILY TARGET HIT - CLOSE ALL ===
+            # (Handled in main loop via risk_mgr.is_daily_target_hit())
+
+        except Exception as e:
+            print(f"[WARN] Position management failed: {e}")
 
 _DASHBOARD_HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "dashboard.html")
 
