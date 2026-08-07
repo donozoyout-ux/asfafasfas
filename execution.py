@@ -11,10 +11,38 @@ class BinanceFuturesExecutor:
         self.api_key = config.BINANCE_API_KEY
         self.secret_key = config.BINANCE_SECRET_KEY
         self.headers = {"X-MBX-APIKEY": self.api_key}
+        self.time_offset_ms = 0
+        self._offset_fetched_at = 0.0
+        self._refresh_timeout_ms = 300000  # Re-sync offset every 5 minutes
+
+    def get_server_time_offset_ms(self) -> int:
+        """Returns local-to-server clock offset (ms), re-syncing periodically.
+
+        Fixes Binance error -1021 'Timestamp outside recvWindow' when the
+        local system clock drifts from Binance server time.
+        """
+        now = time.time()
+        if now - self._offset_fetched_at > (self._refresh_timeout_ms / 1000):
+            try:
+                res = requests.get(
+                    f"{self.base_url}/fapi/v1/time",
+                    timeout=5
+                )
+                if res.status_code == 200:
+                    server_ms = int(res.json().get("serverTime", 0))
+                    if server_ms:
+                        self.time_offset_ms = server_ms - int(now * 1000)
+                        self._offset_fetched_at = now
+                        if abs(self.time_offset_ms) > 1000:
+                            print(f"[TIME-SYNC] Clock offset vs Binance: {self.time_offset_ms:+d} ms")
+            except Exception as e:
+                print(f"[EXCEPT] Server time sync failed: {e}")
+        return self.time_offset_ms
 
     def _sign_request(self, params: dict) -> str:
         """Generates HMAC SHA256 signature for signed endpoints."""
-        params["timestamp"] = int(time.time() * 1000)
+        timestamp = int(time.time() * 1000) + self.get_server_time_offset_ms()
+        params["timestamp"] = timestamp
         query_string = urlencode(params)
         signature = hmac.new(
             self.secret_key.encode("utf-8"),
