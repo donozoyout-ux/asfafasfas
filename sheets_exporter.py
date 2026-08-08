@@ -41,6 +41,23 @@ _FIELD_ENTRY_MAP = {
 _last_sent = {}
 _sent_ids = set()
 
+# Google Forms returns HTTP 200 on both success and failure, so we must verify
+# the response body actually confirms the submission (localized markers).
+_SUCCESS_MARKERS = [
+    "response has been recorded",
+    "your response has been recorded",
+    "yanıtınız kaydedildi",
+    "yanitiniz kaydedildi",
+    "teşekkür",
+    "tesekkur",
+]
+
+
+def _is_success(response_text: str) -> bool:
+    """True if the Google Forms response page confirms the submission."""
+    lower = response_text.lower()
+    return any(m in lower for m in _SUCCESS_MARKERS)
+
 
 def is_enabled() -> bool:
     return bool(FORM_URL and FORM_URL.strip())
@@ -99,12 +116,13 @@ def export_trade(trade: dict) -> bool:
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
             timeout=15,
         )
-        # Google Forms returns 200 on success (even if it also returns HTML).
-        if res.status_code == 200:
+        # Google Forms returns 200 on success (even if it also returns HTML),
+        # so confirm via the response body marker instead of trusting status.
+        if res.status_code == 200 and _is_success(res.text):
             _sent_ids.add(trade_id)
             print(f"[SHEETS] Trade #{trade_id} exported to Google Sheets (form {form_id})")
             return True
-        print(f"[SHEETS] Export failed {res.status_code} for trade #{trade_id}")
+        print(f"[SHEETS] Export not confirmed for trade #{trade_id} (HTTP {res.status_code})")
         return False
     except Exception as e:
         print(f"[SHEETS] Export exception for trade #{trade_id}: {e}")
