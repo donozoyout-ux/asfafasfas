@@ -52,8 +52,8 @@ BINANCE_FUTURES_TAKER_FEE = 0.0005  # 0.05% per order
 ROUNDTRIP_FEE_RATE = BINANCE_FUTURES_TAKER_FEE * 2  # 0.10% total fee for opening + closing
 
 # ATR Dynamic Risk Multipliers
-ATR_SL_MULTIPLIER = 2.5  # Stop Loss = Entry +/- (2.5 * ATR) - wider to avoid noise
-ATR_TP_MULTIPLIER = 3.5  # Take Profit = Entry +/- (3.5 * ATR) - better R:R
+ATR_SL_MULTIPLIER = 1.5  # Stop Loss = Entry +/- (1.5 * ATR) - 1:2 R:R target
+ATR_TP_MULTIPLIER = 3.0  # Take Profit = Entry +/- (3.0 * ATR) - better R:R
 
 # Log / Execution Settings
 CHECK_INTERVAL_SECONDS = 300  # Interval to check position / market state in seconds (5 min)

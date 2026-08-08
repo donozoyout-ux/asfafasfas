@@ -24,6 +24,7 @@ import learning_engine
 import news_service
 import settings
 import sheets_exporter
+import strategy
 from risk_manager import RiskManager
 from execution import BinanceFuturesExecutor
 from telegram_bot import TelegramNotifier
@@ -206,6 +207,7 @@ class BotController:
         self.order_error_stats = {}
         self.daily_start_balance = 5000.0
         self.risk_mgr = RiskManager()
+        self._adopted_needs_protection = False
         
     def send_telegram_status(self):
         self.notifier.send_status_report(
@@ -826,6 +828,7 @@ class BotController:
                         indicator_summary=self.latest_summary
                     )
                     print(f"[ADOPT] Mevcut {existing_pos['side']} pozisyon benimsendi (Trade #{self.active_trade_id})")
+                    self._adopted_needs_protection = True
                 else:
                     try:
                         stale = trade_logger.get_stale_open_trades()
@@ -955,6 +958,10 @@ class BotController:
 
                 previous_position_side = self.latest_position["side"]
 
+                # Protect adopted positions that have no SL/TP algo orders yet
+                if getattr(self, '_adopted_needs_protection', False):
+                    self._ensure_position_protected()
+
                 # Check daily risk limits
                 can_trade, limit_msg = self.risk_mgr.check_daily_limits(self.latest_balance)
                 daily_target_hit = self.risk_mgr.is_daily_target_hit()
@@ -986,9 +993,16 @@ class BotController:
                     time.sleep(config.CHECK_INTERVAL_SECONDS)
                     continue
 
-                # 3. Request Groq AI Decision with TradingView + News + Derivatives Context
-                print("🧠 Consulting Groq Llama-3.3 AI Brain...")
-                ai_decision = ai_brain.analyze_market_with_ai(
+                # 3. Deterministic strategy decides; Groq AI is an advisory vote
+                print("🧠 Strateji katmanı karar veriyor, Groq AI oy veriyor...")
+                strategy_signal = strategy.evaluate(
+                    self.latest_summary,
+                    multiframe_data=self.multiframe_summary,
+                    tradingview_data=self.latest_tradingview,
+                    news_data=self.latest_news,
+                    derivatives_data=self.latest_derivatives,
+                )
+                ai_vote = ai_brain.analyze_market_with_ai(
                     self.latest_summary,
                     self.ticker_24h,
                     multiframe_data=self.multiframe_summary,
@@ -997,18 +1011,7 @@ class BotController:
                     news_data=self.latest_news,
                     derivatives_data=self.latest_derivatives
                 )
-                # If Groq is rate-limited, fall back to a rule-based signal so the
-                # bot keeps trading instead of sitting idle the whole day.
-                if ai_brain.is_rate_limited(ai_decision):
-                    print("[FALLBACK] Groq AI rate-limited -> using rule-based signal")
-                    ai_decision = ai_brain.get_fallback_signal(
-                        self.latest_summary,
-                        tradingview_data=self.latest_tradingview,
-                        news_data=self.latest_news,
-                        derivatives_data=self.latest_derivatives,
-                        multiframe_data=self.multiframe_summary,
-                        current_position=self.latest_position["side"],
-                    )
+                ai_decision = strategy.combine_with_ai(strategy_signal, ai_vote)
                 self.latest_ai_decision = ai_decision
                 
                 action = ai_decision.get("action", "HOLD").upper()
@@ -1017,26 +1020,18 @@ class BotController:
                 sl_mult = ai_decision.get("sl_multiplier_atr", config.ATR_SL_MULTIPLIER)
                 tp_mult = ai_decision.get("tp_multiplier_atr", config.ATR_TP_MULTIPLIER)
                 
-                print(f"🤖 AI Recommendation: [{action}] (Confidence: {confidence}%)")
-                print(f"💬 AI Reasoning: {reasoning}")
+                print(f"🤖 Strateji Kararı: [{action}] (Confidence: {confidence}%)")
+                print(f"💬 {reasoning}")
                 
-                # Get adaptive confidence threshold from learning engine
+                # Adaptive risk settings from learning engine, clamped to config
                 adaptation = {"confidence_threshold": config.CONFIDENCE_THRESHOLD,
                               "risk_per_trade_pct": config.RISK_PER_TRADE_PCT * 100}
                 try:
                     closed = trade_logger.get_closed_trades(limit=10)
                     adaptation = learning_engine.compute_adaptation(closed)
-                    current_threshold = adaptation["confidence_threshold"]
                 except Exception:
-                    current_threshold = config.CONFIDENCE_THRESHOLD
-
-                # When running on the rule-based fallback (Groq rate-limited),
-                # use a lower, fixed threshold. The learning engine raises its
-                # threshold after a losing streak, which would otherwise lock
-                # the fallback out of trading entirely (e.g. 66 < 75 forever).
-                if ai_decision.get("fallback"):
-                    current_threshold = min(current_threshold, config.CONFIDENCE_THRESHOLD)
-                    print(f"🔧 Fallback mode -> threshold lowered to {current_threshold}%")
+                    pass
+                current_threshold = adaptation["confidence_threshold"]
                 
                 # 4. Execute Trade if High Conviction (adaptive threshold)
                 if action in ["LONG", "SHORT"] and confidence >= current_threshold:
@@ -1140,6 +1135,43 @@ class BotController:
             except Exception as e:
                 print(f"[EXCEPT] Loop exception: {e}")
                 time.sleep(10)
+
+    def _ensure_position_protected(self):
+        """Places SL/TP algo orders on an adopted/open position that lacks them.
+
+        Adopted positions (bot restart with an existing Binance position) used
+        to run unprotected until SL/TP existed, which produced oversized losses.
+        """
+        if self.dry_run:
+            return
+        symbol = config.SYMBOL
+        pos = self.latest_position
+        if pos.get("side") == "FLAT":
+            return
+        try:
+            open_algo = self.executor.get_open_algo_orders(symbol)
+            has_sl = any(o.get("orderType") == "STOP_MARKET" for o in open_algo)
+            has_tp = any(o.get("orderType") == "TAKE_PROFIT_MARKET" for o in open_algo)
+            if has_sl and has_tp:
+                self._adopted_needs_protection = False
+                return
+            atr = self.latest_summary.get("atr_14", 0)
+            price = self.latest_summary.get("current_price", 0)
+            side = pos.get("side")
+            qty = pos.get("amount", 0)
+            if not atr or not price or not side or not qty:
+                print("[ADOPT-PROTECT] ATR/fiyat verisi yok, bir sonraki cycle'da tekrar denenir")
+                return
+            if not has_sl:
+                sl = price - atr * config.ATR_SL_MULTIPLIER if side == "LONG" else price + atr * config.ATR_SL_MULTIPLIER
+                self.executor.place_stop_loss_order(symbol, side, round(sl, 2), qty)
+            if not has_tp:
+                tp = price + atr * config.ATR_TP_MULTIPLIER if side == "LONG" else price - atr * config.ATR_TP_MULTIPLIER
+                self.executor.place_take_profit_order(symbol, side, round(tp, 2), qty)
+            self._adopted_needs_protection = False
+            print(f"[ADOPT-PROTECT] Benimsenen {side} pozisyona SL/TP yerleştirildi (qty {qty})")
+        except Exception as e:
+            print(f"[ADOPT-PROTECT] Hata: {e}")
 
     def cleanup_stale_trade(self):
         """Cleans up stale trade ID when Binance shows no position but we have active_trade_id."""

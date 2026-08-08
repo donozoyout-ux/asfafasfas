@@ -8,6 +8,7 @@ conditions led to wins and losses, then adapts its behavior.
 """
 import json
 import os
+import config
 import trade_logger
 
 _DATA_DIR = os.getenv("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
@@ -196,6 +197,12 @@ def compute_adaptation(closed_trades: list) -> dict:
 
     # Roundtrip fee must be recovered
     fee_rate = 0.001  # 0.10% roundtrip
+
+    # Discipline clamp: never exceed the configured risk per trade and never
+    # go below the configured confidence threshold. The learning engine may
+    # only tighten (never loosen) the risk profile.
+    risk = min(risk, config.RISK_PER_TRADE_PCT * 100)
+    confidence = max(confidence, config.CONFIDENCE_THRESHOLD)
 
     adaptation = {
         "confidence_threshold": round(confidence, 1),
