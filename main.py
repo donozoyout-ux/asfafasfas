@@ -205,6 +205,7 @@ class BotController:
         self.latest_derivatives = {"funding_rate": 0.0, "funding_rate_pct": 0.0, "open_interest": 0.0}
         self.order_error_stats = {}
         self.daily_start_balance = 5000.0
+        self.risk_mgr = RiskManager()
         
     def send_telegram_status(self):
         self.notifier.send_status_report(
@@ -955,8 +956,8 @@ class BotController:
                 previous_position_side = self.latest_position["side"]
 
                 # Check daily risk limits
-                can_trade, limit_msg = risk_mgr.check_daily_limits(self.latest_balance)
-                daily_target_hit = risk_mgr.is_daily_target_hit()
+                can_trade, limit_msg = self.risk_mgr.check_daily_limits(self.latest_balance)
+                daily_target_hit = self.risk_mgr.is_daily_target_hit()
                 print(f"🛡️  Risk Manager Status: {limit_msg}")
 
                 # === POSITION MANAGEMENT (if position exists) ===
@@ -1051,7 +1052,7 @@ class BotController:
                     adaptive_lev = adaptive["leverage"]
                     print(f"⚙️ Adaptive: kaldıraç {adaptive_lev}x | SL {adaptive_sl}x ATR | TP {adaptive_tp}x ATR | ATR% {adaptive['atr_pct']}")
 
-                    trade_params = risk_mgr.calculate_position_parameters(
+                    trade_params = self.risk_mgr.calculate_position_parameters(
                         account_balance=self.latest_balance,
                         entry_price=self.latest_summary['current_price'],
                         atr_14=self.latest_summary['atr_14'],
@@ -1303,7 +1304,7 @@ class BotController:
                 )
 
             # === DAILY TARGET HIT - CLOSE ALL ===
-            # (Handled in main loop via risk_mgr.is_daily_target_hit())
+            # (Handled in main loop via self.risk_mgr.is_daily_target_hit())
 
         except Exception as e:
             print(f"[WARN] Position management failed: {e}")
